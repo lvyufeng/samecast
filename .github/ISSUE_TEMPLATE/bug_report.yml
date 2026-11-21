@@ -1,0 +1,56 @@
+name: Bug 报告
+description: 投屏失败、两台电视不同步、App 闪退、被别的投屏抢占等
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前先看一眼 [docs/install-tv.md](../docs/install-tv.md) 的排错章节。
+
+        **不要贴真实内网 IP、token 等隐私信息**（可以写成 `192.168.x.x`）。
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 发生了什么？复现步骤是什么？两台电视是都出问题还是只有一台？
+    validations:
+      required: true
+  - type: input
+    id: tvs
+    attributes:
+      label: 电视型号 / 系统版本
+      placeholder: 例如 创维 55A3（Android 9）、微鲸 W40F（Android 5.1.1）
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: 手机与投屏 App
+      placeholder: 例如 iPhone 15 / 爱奇艺 13.2；Android / 哔哩哔哩
+    validations:
+      required: true
+  - type: input
+    id: content
+    attributes:
+      label: 投屏的内容
+      description: 是哪个片源？普通视频还是直播 / 会员片源？
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 服务端日志和电视端 logcat，能贴多少贴多少。
+      value: |
+        ```bash
+        journalctl -u samecast -n 50 --no-pager
+        adb -s <电视IP>:5555 logcat -s samecast:V
+        ```
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 已看过 docs/install-tv.md 的排错章节
+          required: true
+        - label: 日志里没有真实内网 IP / 密码 / token
+          required: true

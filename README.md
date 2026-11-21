@@ -65,12 +65,14 @@ python3 server/app.py -c config.json
 构建不需要 Android Studio：
 
 ```bash
-cd android && ./gradlew assembleDebug   # 产物：app/build/outputs/apk/debug/SameCast-0.3.0-debug.apk
+# 构建：Gradle wrapper 自动下载 Gradle，只需要 JDK 17 + Android SDK 34
+source toolchain/env.sh                     # 用项目内自带的 JDK/SDK；本机已装可跳过
+(cd android && ./gradlew assembleDebug)     # 产物：android/app/build/outputs/apk/debug/SameCast-0.3.0-debug.apk
 
 # 装到电视：全程 adb，不需要遥控器点任何确认框
 export SAMECAST_DEVICES="192.168.1.31:5555 192.168.1.32:5555"
-./toolchain/install-tv.sh              # 装到 SAMECAST_DEVICES 里的所有电视
-./toolchain/install-tv.sh 192.168.1.32:5555   # 或者只装某一台
+./toolchain/install-tv.sh                   # 装到 SAMECAST_DEVICES 里的所有电视
+./toolchain/install-tv.sh 192.168.1.32:5555 # 或者只装某一台
 ```
 
 构建只需要 JDK 17 + Android SDK 34；`toolchain/` 里有在 macOS 上一键装好这两样（以及 Gradle）
@@ -99,9 +101,8 @@ export SAMECAST_DEVICES="192.168.1.31:5555 192.168.1.32:5555"
 
 ### systemd（推荐，长期运行）
 
-在 Debian / Ubuntu 上一条命令装好（非 root 用户 `samecast` + 开机自启 + 崩溃自动拉起）：
-
-在目标机器上能免密 ssh 的前提下（本机装则用 `sudo`）：
+在 Debian / Ubuntu 上一条命令装好（独立用户 `samecast` + 开机自启 + 崩溃自动拉起）。
+目标机器需要能免密 ssh（本机安装则用 `sudo`）：
 
 ```bash
 git clone https://github.com/lvyufeng/samecast.git && cd samecast

@@ -19,7 +19,7 @@ remote() { ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$TARGET" "$
 if [ -n "$TARGET" ]; then
   echo "==> 部署到 $TARGET:$PREFIX"
   remote "mkdir -p $PREFIX && rm -rf $PREFIX/server $PREFIX/web"
-  tar czf - server web config.example.json | remote "tar xzf - -C $PREFIX"
+  tar czf - server web config.example.json | remote "tar xzf - --warning=no-unknown-keyword -C $PREFIX"
   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$TARGET" "cat > $UNIT" < deploy/samecast.service
   # 首次部署时生成 config.json（之后不再覆盖）
   remote "if [ ! -f $PREFIX/config.json ]; then cp $PREFIX/config.example.json $PREFIX/config.json; fi"

@@ -21,10 +21,10 @@ toolchain/android-sdk/platform-tools/adb devices
 ## 二、一键静默安装（推荐）
 
 ```bash
-cd ~/Projects/samecast
-./toolchain/install-tv.sh                      # 装到两台电视并自动启动
+export SAMECAST_DEVICES="192.168.1.31:5555 192.168.1.32:5555"
+./toolchain/install-tv.sh                   # 装到 SAMECAST_DEVICES 里的所有电视并自动启动
 ./toolchain/install-tv.sh 192.168.1.32:5555 # 只装某一台
-./toolchain/install-tv.sh --no-start           # 只装不启动
+./toolchain/install-tv.sh --no-start        # 只装不启动
 ```
 
 脚本做的事：
