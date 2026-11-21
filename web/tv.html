@@ -28,7 +28,7 @@ async function report(force){
   if(!force && now - lastReport < 800) return;
   lastReport = now;
   try {
-    await fetch('/api/recv/' + rid + '/state', { method:'POST',
+    await fetch('/api/recv/' + rid + '/state?kind=web', { method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ state: video.paused ? (video.currentTime>0?'paused':'idle') : 'playing',
                              position: video.currentTime || 0 }) });
@@ -38,13 +38,13 @@ async function report(force){
 // 本机（电视遥控器/鼠标）操作 -> 上报给服务端，由服务端广播给其他端
 video.addEventListener('pause', () => {
   if (Date.now() - lastRemote < 800) return;   // 忽略远端指令造成的暂停
-  fetch('/api/recv/' + rid + '/command', { method:'POST',
+  fetch('/api/recv/' + rid + '/command?kind=web', { method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ cmd:'pause', position: video.currentTime }) });
 });
 video.addEventListener('play', () => {
   if (Date.now() - lastRemote < 800) return;
-  fetch('/api/recv/' + rid + '/command', { method:'POST',
+  fetch('/api/recv/' + rid + '/command?kind=web', { method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ cmd:'play', position: video.currentTime }) });
 });
@@ -52,7 +52,7 @@ video.addEventListener('timeupdate', () => report(false));
 
 async function tick(){
   try {
-    const r = await fetch('/api/recv/' + rid + '/poll?since=' + since);
+    const r = await fetch('/api/recv/' + rid + '/poll?since=' + since + '&kind=web');
     const data = await r.json();
     since = data.seq;
     for (const c of data.commands || []) apply(c);

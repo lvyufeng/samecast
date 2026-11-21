@@ -67,6 +67,7 @@
 </div>
 <script>
 let snap = null;
+const KIND_LABEL = { app:'电视', web:'网页', kodi:'Kodi' };
 function fmt(s){ s=Math.max(0,Math.floor(s||0)); const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
   return (h?h+":":"")+(h?String(m).padStart(2,"0"):m)+":"+String(x).padStart(2,"0"); }
 async function refresh(){
@@ -79,7 +80,7 @@ async function refresh(){
     const box = document.getElementById('recvs');
     box.innerHTML = (snap.receivers||[]).map(r =>
       '<div class="recv"><span><span class="dot '+(r.state!=='idle'&&r.state!=='unknown'?'ok':'bad')+'"></span>'
-      + r.name + ' <span class="muted">('+r.kind+')</span></span>'
+      + r.name + ' <span class="muted">('+(KIND_LABEL[r.kind]||r.kind)+')</span></span>'
       + '<span class="mono">'+r.state+' · '+fmt(r.position)+'</span></div>').join('');
     document.getElementById('raw').textContent = JSON.stringify(snap, null, 1).slice(0, 1200);
   } catch(e) { document.getElementById('state').textContent = '离线'; }

@@ -94,14 +94,23 @@ class App:
             fh.write(value)
         return value
 
-    def ensure_receiver(self, rid: str):
-        """电视端 App 首次上线时自动注册，不需要改配置重启。"""
+    def ensure_receiver(self, rid: str, kind: str = ""):
+        """电视端 App 首次上线时自动注册，不需要改配置重启。
+
+        电视 App 和网页接收端共用同一套轮询协议，客户端用 kind 自报类型；
+        不报的按电视端算（老版本 App），网页版会显式传 kind=web。
+        """
+        if kind not in ("app", "web"):
+            kind = ""
         rec = self.receivers.get(rid)
         if isinstance(rec, WebReceiver):
+            if kind and rec.kind != kind:
+                rec.kind = kind
             return rec
         if rec is not None:
             return None
-        rec = WebReceiver(rid, "电视-" + rid[:4])
+        rec = WebReceiver(rid, ("网页-" if kind == "web" else "电视-") + rid[:4])
+        rec.kind = kind or "app"
         self.receivers[rid] = rec
         self.group.add_receiver(rec)
         return rec
@@ -195,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(app.group.snapshot())
             if path.startswith("/api/recv/") and path.endswith("/poll"):
                 rid = path[len("/api/recv/"):-len("/poll")].strip("/")
-                rec = app.ensure_receiver(rid)
+                rec = app.ensure_receiver(rid, (query.get("kind") or [""])[0])
                 if not isinstance(rec, WebReceiver):
                     return self._json({"error": "unknown web receiver"}, 404)
                 since = int((query.get("since") or ["0"])[0])
@@ -220,6 +229,8 @@ class Handler(BaseHTTPRequestHandler):
     # ---- POST：SOAP 控制 + 网页 API ----
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        query = parse_qs(urlparse(self.path).query)
+        kind = (query.get("kind") or [""])[0]
         app = self.app
         try:
             if path in ("/AVTransport/control", "/RenderingControl/control", "/ConnectionManager/control"):
@@ -245,14 +256,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(group.snapshot())
             if path.startswith("/api/recv/") and path.endswith("/state"):
                 rid = path[len("/api/recv/"):-len("/state")].strip("/")
-                rec = app.ensure_receiver(rid)
+                rec = app.ensure_receiver(rid, kind)
                 if not isinstance(rec, WebReceiver):
                     return self._json({"error": "unknown web receiver"}, 404)
                 rec.report(self._read_json())
                 return self._json({"ok": True})
             if path.startswith("/api/recv/") and path.endswith("/command"):
                 rid = path[len("/api/recv/"):-len("/command")].strip("/")
-                rec = app.ensure_receiver(rid)
+                rec = app.ensure_receiver(rid, kind)
                 if not isinstance(rec, WebReceiver):
                     return self._json({"error": "unknown web receiver"}, 404)
                 payload = self._read_json()
