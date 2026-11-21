@@ -201,4 +201,4 @@ cd server && python3 -m unittest discover -s tests
 
 ## 许可证
 
-[MIT](LICENSE) © SameCast contributors
+[MIT](LICENSE) © 2026 Yufeng Lyu
