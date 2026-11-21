@@ -63,7 +63,8 @@ python3 server/app.py -c config.json
 
 见 [docs/install-tv.md](docs/install-tv.md)。全屏无 UI、ExoPlayer 硬解、SSDP 自动找网关、
 遥控器「确定」= 全组暂停/播放、开机自启。支持 Android 5.1+（minSdk 21），armv7 / arm64 通用。
-构建不需要 Android Studio：
+不想自己编译：直接下 [v0.3.0 测试版 APK](https://github.com/lvyufeng/samecast/releases/tag/v0.3.0)（debug 签名，仅供测试），
+或者自己构建（不需要 Android Studio）：
 
 ```bash
 # 构建：Gradle wrapper 自动下载 Gradle，只需要 JDK 17 + Android SDK 34
