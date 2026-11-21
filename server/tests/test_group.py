@@ -25,6 +25,7 @@ class FakeReceiver(Receiver):
         self.state = "idle"
         self.position = 0.0
         self.preempted = False
+        self.reconnects = 0          # 相当于 App 重启次数（WebReceiver 上报）
         self.cmds: list[str] = []
 
     # 指令
@@ -59,6 +60,7 @@ class FakeReceiver(Receiver):
             "state": self.state,
             "position": self.position,
             "preempted": self.preempted,
+            "reconnects": self.reconnects,
         }
 
 
@@ -345,6 +347,79 @@ class StallTest(unittest.TestCase):
         recs[0].preempted = True   # 已被别的投屏接管：卡死也不再拉回来
         group.tick()
         self.assertEqual(recs[0].cmds.count("load"), 0)
+
+
+class RejoinTest(unittest.TestCase):
+    """电视端 App 重启或新设备加入时，要立刻接回整组时间轴。"""
+
+    def _playing(self) -> tuple[Group, list[FakeReceiver]]:
+        group, recs = make_group("tv-a")
+        group.duration = 600.0
+        recs[0].state = "playing"
+        group.tick()
+        group._set_anchor(120.0)
+        return group, recs
+
+    def test_reconnect_triggers_immediate_reload(self) -> None:
+        """App 重启前可能已在 30s 冷却里，重连后不能继续等。"""
+        group, recs = self._playing()
+        group._reload_count["tv-a"] = group.reload_max_attempts + 1
+        group._reload_giveup["tv-a"] = time.monotonic()
+        group._grace_until = 0.0
+        recs[0].cmds.clear()
+        recs[0].state = "idle"
+        recs[0].reconnects = 1          # 接收端重启后第一次被读到
+        group.tick()
+        self.assertEqual(recs[0].cmds.count("load"), 1)
+        self.assertEqual(recs[0].cmds.count("play"), 1)
+        self.assertEqual(recs[0].cmds.count("seek"), 1)
+        self.assertNotIn("tv-a", group._reload_giveup)
+        # 同一轮重连事件只处理一次
+        recs[0].cmds.clear()
+        group.tick()
+        self.assertEqual(recs[0].cmds.count("load"), 0)
+
+    def test_reconnect_while_stopped_does_not_load(self) -> None:
+        group, recs = self._playing()
+        group.stop()
+        recs[0].cmds.clear()
+        recs[0].reconnects = 1
+        group.tick()
+        self.assertEqual(recs[0].cmds, [])
+
+    def test_reconnect_after_reload_does_not_storm(self) -> None:
+        """重连后一条指令都不生效时，也不能每轮都重载。"""
+        group, recs = self._playing()
+        group._grace_until = 0.0
+        recs[0].state = "idle"
+        recs[0].reconnects = 1
+        group.tick()
+        recs[0].cmds.clear()
+        for _ in range(5):
+            group._grace_until = 0.0
+            recs[0].state = "idle"
+            group.tick()
+        self.assertEqual(recs[0].cmds.count("load"), 0)
+
+    def test_add_receiver_mid_play_joins_anchor(self) -> None:
+        group, _recs = self._playing()
+        late = FakeReceiver("tv-b")
+        group.add_receiver(late)
+        self.assertEqual(late.cmds, ["load", "play", "seek"])
+
+    def test_add_receiver_mid_pause_seeks_then_pauses(self) -> None:
+        group, _recs = self._playing()
+        group.pause()
+        late = FakeReceiver("tv-b")
+        group.add_receiver(late)
+        self.assertEqual(late.cmds, ["load", "seek", "pause"])
+
+    def test_add_receiver_while_stopped_does_nothing(self) -> None:
+        group, _recs = self._playing()
+        group.stop()
+        late = FakeReceiver("tv-b")
+        group.add_receiver(late)
+        self.assertEqual(late.cmds, [])
 
 
 if __name__ == "__main__":

@@ -79,6 +79,8 @@ class Group:
         self.reload_max_attempts = 3
         self._reload_last: dict[str, float] = {}
         self._reload_count: dict[str, int] = {}
+        # 接收端重启次数（它会一直递增），用来发现"App 刚重新打开"并立刻接回时间轴
+        self._seen_reconnects: dict[str, int] = {}
         # 放弃重试后歇一会儿再放行新一轮：电视重启、重新打开 App 后能自己接回来
         self.reload_retry_cooldown = 30.0
         self._reload_giveup: dict[str, float] = {}
@@ -98,9 +100,21 @@ class Group:
 
     def add_receiver(self, receiver: Receiver) -> None:
         """运行期动态加入的接收端（例如电视端 App 首次上线）。"""
+        rid = receiver.id
         with self._lock:
-            self.receivers[receiver.id] = receiver
+            self.receivers[rid] = receiver
+            # 新设备不背历史包袱：清掉可能残留的失败次数/校准值，按当前时间轴重来
+            self._reset_reload_state(rid)
+            self._loaded_receivers.discard(rid)
+            self._receiver_status.pop(rid, None)
+            self._prev_receiver_state.pop(rid, None)
+            uri, state = self.uri, self.state
+            pos = self.position()
         LOG.info("新接收端加入: %s (%s)", receiver.name, receiver.kind)
+        if uri and state in (PLAYING, PAUSED):
+            LOG.info("%s 接入正在播放的整组时间轴（%s @%.1fs）", receiver.name, state, pos)
+            self._reload_last[rid] = time.monotonic()
+            self._reload_receiver(rid, state, pos)
         self._notify()
 
     def position_if_stopped(self) -> float | None:
@@ -333,6 +347,23 @@ class Group:
                 self._on_preempted(rid)
                 continue
             self._preempted.discard(rid)
+            # 电视端 App 重启（接收端序号归零）后第一次被读到：旧指令已经作废，
+            # 立刻按当前时间轴接回去，别走 5s 退避、更别落在 30s 冷却里
+            reconnects = int(st.get("reconnects") or 0)
+            if reconnects > self._seen_reconnects.get(rid, 0):
+                self._seen_reconnects[rid] = reconnects
+                self._reset_reload_state(rid)
+                self._reload_last[rid] = time.monotonic()
+                with self._lock:
+                    group_state = self.state
+                    group_pos = self.position()
+                if self.uri and group_state in (PLAYING, PAUSED):
+                    LOG.info("%s 重新连上，立刻接回时间轴（%s @%.1fs）",
+                             rid, group_state, group_pos)
+                    self._reload_receiver(rid, group_state, group_pos)
+                else:
+                    LOG.info("%s 重新连上（当前未播放）", rid)
+                continue
             if prev is None:
                 continue
             if time.monotonic() < self._grace_until:
@@ -403,6 +434,16 @@ class Group:
                 return
             LOG.info("%s 端已掉出播放，重新载入", rid)
             self._reload_receiver(rid, group_state, group_pos)
+
+    def _reset_reload_state(self, rid: str) -> None:
+        """清掉某一端除重连计数外的运行时状态（新设备加入 / 它自己重启后重来）。"""
+        self._reload_last.pop(rid, None)
+        self._reload_count.pop(rid, None)
+        self._reload_giveup.pop(rid, None)
+        self._bias.pop(rid, None)
+        self._speed.pop(rid, None)
+        self._last_seek.pop(rid, None)
+        self._buffering_since.pop(rid, None)
 
     def _reload_receiver(self, rid: str, group_state: str, group_pos: float) -> None:
         """把一端重新拉回整组时间轴（掉线 / 卡死共用）。"""

@@ -169,11 +169,15 @@ class WebReceiver(Receiver):
         self.name = name
         self._lock = threading.Lock()
         self._seq = 0
-        self._polls = 0
-        self._last_ack = 0
+        # 上一次返回给接收端的水位。接收端下一次必须带着不小于它的序号回来，
+        # 否则说明它重启/刷新了，队里的旧指令作废。
+        self._expect_since = 0
         self._queue: list[dict] = []
         self._status = {"state": "idle", "position": 0.0}
         self._last_seen = time.time()
+        # App/网页重启次数。Group 发现它变大就立刻按当前时间轴接回去，
+        # 用计数器而不是布尔标志，免得轮询/上报的时序把事件吃掉。
+        self._reconnects = 0
 
     # ---- 给网页的接口 ----
     def poll(self, since: int) -> tuple[list[dict], int]:
@@ -181,17 +185,21 @@ class WebReceiver(Receiver):
             # 接收端重启/网页刷新后序号会归零。队里攒着的是旧时间轴的指令
             # （比如几分钟前的 seek），重放会把电视拉回旧位置，所以直接丢掉，
             # 交给 Group 按当前时间轴重新下发 load/play/seek。
-            restarted = since < self._last_ack or (
-                self._polls > 0 and since == 0 and self._seq > 0)
-            if restarted:
+            if since < self._expect_since:
                 dropped = len(self._queue)
                 self._queue = []
+                self._reconnects += 1
                 LOG.info("[%s] 接收端重新连接（序号 %d -> %d），丢弃旧指令 %d 条",
-                         self.id, self._last_ack, since, dropped)
-            self._polls += 1
-            self._last_ack = max(self._last_ack, since)
+                         self.id, self._expect_since, since, dropped)
+            # 服务端自己重启后序号从 0 开始，但接收端还记着上一次的水位。
+            # 以接收端为准继续往后编号，别让水位倒退（否则它会一直以为自己重启了）。
+            if since > self._seq:
+                self._seq = since
             cmds = [c for c in self._queue if c["seq"] > since]
-            return cmds, self._seq
+            self._expect_since = max(self._seq, since)
+            # 轮询本身就是"我还活着"的信号，用不着等下一份状态上报
+            self._last_seen = time.time()
+            return cmds, self._expect_since
 
     def report(self, payload: dict) -> None:
         with self._lock:
@@ -240,7 +248,10 @@ class WebReceiver(Receiver):
         self._push({"cmd": "speed", "speed": round(float(speed), 3)})
 
     def status(self) -> dict:
-        if not self.online():
-            return {"state": "idle", "position": 0.0}
         with self._lock:
-            return dict(self._status)
+            if not self.online():
+                return {"state": "idle", "position": 0.0}
+            st = dict(self._status)
+            # 重启次数递增时，Group 用它触发"立刻接回时间轴"
+            st["reconnects"] = self._reconnects
+            return st
