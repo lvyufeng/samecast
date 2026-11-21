@@ -1,6 +1,7 @@
 # SameCast · 局域网多电视同步投屏网关
 
 [![服务端测试](https://github.com/lvyufeng/samecast/actions/workflows/tests.yml/badge.svg)](https://github.com/lvyufeng/samecast/actions/workflows/tests.yml)
+[![Docker 镜像](https://github.com/lvyufeng/samecast/actions/workflows/docker.yml/badge.svg)](https://github.com/lvyufeng/samecast/actions/workflows/docker.yml)
 [![Android 构建](https://github.com/lvyufeng/samecast/actions/workflows/android.yml/badge.svg)](https://github.com/lvyufeng/samecast/actions/workflows/android.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 

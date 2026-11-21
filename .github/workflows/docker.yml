@@ -1,0 +1,41 @@
+name: Docker 镜像
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - docker-compose.yml
+      - config.example.json
+      - server/**
+      - web/**
+      - .github/workflows/docker.yml
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建镜像
+        run: docker build -t samecast:ci .
+      - name: 冒烟启动
+        run: |
+          set -e
+          mkdir -p /tmp/sc/data
+          cp config.example.json /tmp/sc/config.json
+          sed -i 's/"port": 8090/"port": 8091/' /tmp/sc/config.json
+          docker run -d --name sc --network host \
+            -v /tmp/sc/config.json:/app/config.json:ro \
+            -v /tmp/sc/data:/app/data \
+            samecast:ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8091/api/status -o /tmp/sc/status.json; then ok=1; break; fi
+            sleep 1
+          done
+          echo "--- 容器日志:"; docker logs sc
+          echo "--- /api/status:"; cat /tmp/sc/status.json || true
+          test "$ok" = "1"
+          grep -q '"receivers"' /tmp/sc/status.json
