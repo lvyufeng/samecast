@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 import unittest
 
 # 测试里故意触发告警分支，别把日志刷到测试输出里
@@ -260,6 +261,37 @@ class ReloadBackoffTest(unittest.TestCase):
             group.tick()
         self.assertGreaterEqual(group._reload_count.get("tv-a", 0), group.reload_max_attempts)
         self.assertLessEqual(recs[0].cmds.count("load"), 4)
+
+    def test_retries_again_after_cooldown(self) -> None:
+        """电视重启/重新开 App 后，停手期满要能再把它拉回来。"""
+        group, recs = make_group("tv-a")
+        group.duration = 600.0
+        group.reload_retry_cooldown = 0.0   # 等价于"已经歇够"
+        recs[0].state = "playing"
+        group.tick()
+        # 已放弃的状态：计数停在 max+次数，放弃时刻留给"很久以前"
+        group._reload_count["tv-a"] = group.reload_max_attempts + 1
+        group._reload_giveup["tv-a"] = 0.0
+        group._grace_until = 0.0
+        recs[0].cmds.clear()
+        recs[0].state = "idle"
+        group.tick()
+        self.assertEqual(recs[0].cmds.count("load"), 1)
+
+    def test_stays_given_up_during_cooldown(self) -> None:
+        """停手期内不要重载，避免源真挂了时又变成风暴。"""
+        group, recs = make_group("tv-a")
+        group.duration = 600.0
+        recs[0].state = "playing"
+        group.tick()
+        group._reload_count["tv-a"] = group.reload_max_attempts + 1
+        group._reload_giveup["tv-a"] = time.monotonic()
+        group._grace_until = 0.0
+        recs[0].cmds.clear()
+        recs[0].state = "idle"
+        for _ in range(5):
+            group.tick()
+        self.assertEqual(recs[0].cmds.count("load"), 0)
 
     def test_recovery_resets_backoff(self) -> None:
         group, recs = make_group("tv-a")

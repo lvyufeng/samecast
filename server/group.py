@@ -79,6 +79,9 @@ class Group:
         self.reload_max_attempts = 3
         self._reload_last: dict[str, float] = {}
         self._reload_count: dict[str, int] = {}
+        # 放弃重试后歇一会儿再放行新一轮：电视重启、重新打开 App 后能自己接回来
+        self.reload_retry_cooldown = 30.0
+        self._reload_giveup: dict[str, float] = {}
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -137,6 +140,7 @@ class Group:
                 self._preempted.clear()
                 self._reload_last.clear()
                 self._reload_count.clear()
+                self._reload_giveup.clear()
             LOG.info("载入 %s (来源 %s)", self.title or uri, source or "-")
         if changed:
             for rec in self.receivers.values():
@@ -159,6 +163,7 @@ class Group:
                 self._speed[rid] = 1.0
             self._reload_last.clear()
             self._reload_count.clear()
+            self._reload_giveup.clear()
             recs = list(self.receivers.values())
             LOG.info("播放 @%.1fs (来源 %s)", pos, source or "-")
         for rec in recs:
@@ -415,9 +420,11 @@ class Group:
             LOG.exception("重新载入 %s 失败", rid)
 
     def _should_reload(self, rid: str) -> bool:
-        """退避：同一端两次重载至少间隔 reload_min_interval，连续失败超过上限就放弃。
+        """退避：同一端两次重载至少间隔 reload_min_interval，连续失败超过上限就歇一会儿。
 
         源不可用（文件被删、服务挂了）时，否则会变成每轮一次 load 的无限重载风暴。
+        但电视重启、重新打开 App 之后还得能自己接回来：停手 reload_retry_cooldown 秒后
+        再放行新一轮；该端正常上报 playing 或来了新的播放指令会立即清零计数。
         """
         now = time.monotonic()
         with self._lock:
@@ -426,9 +433,17 @@ class Group:
             if count >= self.reload_max_attempts:
                 if count == self.reload_max_attempts:
                     self._reload_count[rid] = count + 1
-                    LOG.warning("%s 连续 %d 次重载失败，暂停自动重试（等新的播放指令）",
-                                rid, count)
-                return False
+                    self._reload_giveup[rid] = now
+                    LOG.warning("%s 连续 %d 次重载失败，暂停自动重试（%.0fs 后再试）",
+                                rid, count, self.reload_retry_cooldown)
+                    return False
+                if now - self._reload_giveup.get(rid, now) < self.reload_retry_cooldown:
+                    return False
+                LOG.info("%s 停手 %.0fs 后重新尝试载入", rid, self.reload_retry_cooldown)
+                count = 0
+                self._reload_count[rid] = 0
+                self._reload_giveup.pop(rid, None)
+                last = 0.0
             if now - last < self.reload_min_interval:
                 return False
             self._reload_last[rid] = now

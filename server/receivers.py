@@ -169,6 +169,8 @@ class WebReceiver(Receiver):
         self.name = name
         self._lock = threading.Lock()
         self._seq = 0
+        self._polls = 0
+        self._last_ack = 0
         self._queue: list[dict] = []
         self._status = {"state": "idle", "position": 0.0}
         self._last_seen = time.time()
@@ -176,6 +178,18 @@ class WebReceiver(Receiver):
     # ---- 给网页的接口 ----
     def poll(self, since: int) -> tuple[list[dict], int]:
         with self._lock:
+            # 接收端重启/网页刷新后序号会归零。队里攒着的是旧时间轴的指令
+            # （比如几分钟前的 seek），重放会把电视拉回旧位置，所以直接丢掉，
+            # 交给 Group 按当前时间轴重新下发 load/play/seek。
+            restarted = since < self._last_ack or (
+                self._polls > 0 and since == 0 and self._seq > 0)
+            if restarted:
+                dropped = len(self._queue)
+                self._queue = []
+                LOG.info("[%s] 接收端重新连接（序号 %d -> %d），丢弃旧指令 %d 条",
+                         self.id, self._last_ack, since, dropped)
+            self._polls += 1
+            self._last_ack = max(self._last_ack, since)
             cmds = [c for c in self._queue if c["seq"] > since]
             return cmds, self._seq
 
