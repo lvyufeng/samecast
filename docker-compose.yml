@@ -1,0 +1,11 @@
+services:
+  samecast:
+    build: .
+    container_name: samecast
+    restart: unless-stopped
+    network_mode: host          # SSDP 组播必须用宿主网络
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Shanghai

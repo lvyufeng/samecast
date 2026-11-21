@@ -1,0 +1,25 @@
+[Unit]
+Description=SameCast 局域网多屏同步投屏网关
+Documentation=https://github.com/lvyufeng/samecast
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=samecast
+Group=samecast
+WorkingDirectory=/opt/samecast/server
+ExecStart=/usr/bin/python3 /opt/samecast/server/app.py -c /opt/samecast/config.json
+Restart=always
+RestartSec=2
+SyslogIdentifier=samecast
+
+# 基础加固：只需要写 data/ 目录
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/opt/samecast/data
+
+[Install]
+WantedBy=multi-user.target

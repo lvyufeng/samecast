@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>接收端</title>
+<style>
+  html,body { margin:0; height:100%; background:#000; overflow:hidden; }
+  video { width:100%; height:100%; background:#000; object-fit:contain; }
+  #hud { position:fixed; left:12px; bottom:12px; color:#9aa4b8; font:12px/1.4 -apple-system,sans-serif;
+         background:rgba(0,0,0,.5); padding:6px 10px; border-radius:6px; pointer-events:none; }
+</style>
+</head>
+<body>
+<video id="v" playsinline webkit-playsinline></video>
+<div id="hud">等待投屏…</div>
+<script>
+const params = new URLSearchParams(location.search);
+const rid = params.get('id') || 'tv1';
+const video = document.getElementById('v');
+const hud = document.getElementById('hud');
+let since = 0, lastRemote = 0, lastReport = 0;
+
+function log(t){ hud.textContent = rid + ' · ' + t; }
+
+async function report(force){
+  const now = Date.now();
+  if(!force && now - lastReport < 800) return;
+  lastReport = now;
+  try {
+    await fetch('/api/recv/' + rid + '/state', { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ state: video.paused ? (video.currentTime>0?'paused':'idle') : 'playing',
+                             position: video.currentTime || 0 }) });
+  } catch(e) {}
+}
+
+// 本机（电视遥控器/鼠标）操作 -> 上报给服务端，由服务端广播给其他端
+video.addEventListener('pause', () => {
+  if (Date.now() - lastRemote < 800) return;   // 忽略远端指令造成的暂停
+  fetch('/api/recv/' + rid + '/command', { method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ cmd:'pause', position: video.currentTime }) });
+});
+video.addEventListener('play', () => {
+  if (Date.now() - lastRemote < 800) return;
+  fetch('/api/recv/' + rid + '/command', { method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ cmd:'play', position: video.currentTime }) });
+});
+video.addEventListener('timeupdate', () => report(false));
+
+async function tick(){
+  try {
+    const r = await fetch('/api/recv/' + rid + '/poll?since=' + since);
+    const data = await r.json();
+    since = data.seq;
+    for (const c of data.commands || []) apply(c);
+    if (data.group && data.group.state === 'PLAYING') {
+      const gp = data.group.position;
+      if (!video.paused && Math.abs(video.currentTime - gp) > 1.2 && !video.seeking) {
+        video.currentTime = gp;
+      }
+    }
+  } catch(e) {}
+  setTimeout(tick, 400);
+}
+
+function apply(c){
+  lastRemote = Date.now();
+  if (c.cmd === 'load') {
+    video.src = c.uri;
+    log('已载入 ' + c.uri.slice(0, 60));
+    video.load();
+  } else if (c.cmd === 'play') {
+    video.play().catch(()=>{});
+    log('播放中');
+  } else if (c.cmd === 'pause') {
+    video.pause();
+    log('已暂停');
+  } else if (c.cmd === 'seek') {
+    video.currentTime = c.position || 0;
+  } else if (c.cmd === 'stop') {
+    video.pause(); video.removeAttribute('src'); video.load();
+    log('已停止');
+  } else if (c.cmd === 'volume') {
+    video.volume = Math.max(0, Math.min(1, (c.volume||0)/100));
+  }
+  // 收到指令后立即回报一次状态
+  setTimeout(()=>report(true), 300);
+}
+
+tick();
+report(true);
+setInterval(()=>report(true), 3000);
+document.addEventListener('keydown', (e) => {
+  if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault();
+    if (video.paused) video.play(); else video.pause();
+  }
+});
+</script>
+</body>
+</html>

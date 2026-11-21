@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SameCast · 控制台</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;
+         background:#111318; color:#e6e8ee; }
+  .wrap { max-width:900px; margin:0 auto; padding:24px; }
+  h1 { font-size:20px; font-weight:600; margin:0 0 4px; }
+  .sub { color:#8b93a7; font-size:13px; margin-bottom:20px; }
+  .card { background:#1a1d25; border:1px solid #262b36; border-radius:12px; padding:16px; margin-bottom:14px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button { background:#2b3242; color:#e6e8ee; border:1px solid #3a4256; border-radius:8px;
+           padding:8px 14px; font-size:14px; cursor:pointer; }
+  button:hover { background:#353d50; }
+  button.primary { background:#3b5bdb; border-color:#4c6ef5; }
+  input[type=text] { flex:1; min-width:240px; background:#12141a; color:#e6e8ee;
+                     border:1px solid #2c3240; border-radius:8px; padding:8px 10px; font-size:13px; }
+  .state { font-size:28px; font-weight:700; letter-spacing:.5px; }
+  .state.PLAYING { color:#51cf66; } .state.PAUSED_PLAYBACK { color:#ffd43b; }
+  .state.STOPPED, .state.NO_MEDIA_PRESENT { color:#8b93a7; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  .recv { display:flex; justify-content:space-between; padding:10px 12px; border-radius:8px;
+          background:#12141a; margin-top:8px; font-size:13px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; background:#666; }
+  .dot.ok { background:#51cf66; } .dot.bad { background:#e03131; }
+  .muted { color:#8b93a7; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SameCast 网关</h1>
+  <div class="sub">手机在投屏 App 里选择「<span id="devname">SameCast</span>」即可；这里可以查看状态、手动测试。</div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><div class="state" id="state">—</div><div class="muted" id="title">未投屏</div></div>
+      <div class="mono" id="time">0:00 / 0:00</div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="primary" onclick="ctl('play')">播放</button>
+      <button onclick="ctl('pause')">暂停</button>
+      <button onclick="ctl('stop')">停止</button>
+      <button onclick="seek(-10)">« 10s</button>
+      <button onclick="seek(10)">10s »</button>
+      <input type="range" min="0" max="100" onchange="ctl('volume',{volume:+this.value})" value="50" style="width:120px">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">接收端</div>
+    <div id="recvs"></div>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:8px">手动测试：粘贴一个 m3u8 / mp4 直链，点载入并播放</div>
+    <div class="row">
+      <input type="text" id="uri" placeholder="https://example.com/video.m3u8">
+      <button class="primary" onclick="loadUri()">载入并播放</button>
+    </div>
+  </div>
+
+  <div class="card muted mono" id="raw"></div>
+</div>
+<script>
+let snap = null;
+function fmt(s){ s=Math.max(0,Math.floor(s||0)); const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
+  return (h?h+":":"")+(h?String(m).padStart(2,"0"):m)+":"+String(x).padStart(2,"0"); }
+async function refresh(){
+  try {
+    const r = await fetch('/api/status'); snap = await r.json();
+    document.getElementById('state').textContent = snap.state;
+    document.getElementById('state').className = 'state ' + snap.state;
+    document.getElementById('title').textContent = snap.title || snap.uri || '未投屏';
+    document.getElementById('time').textContent = fmt(snap.position) + ' / ' + fmt(snap.duration);
+    const box = document.getElementById('recvs');
+    box.innerHTML = (snap.receivers||[]).map(r =>
+      '<div class="recv"><span><span class="dot '+(r.state!=='idle'&&r.state!=='unknown'?'ok':'bad')+'"></span>'
+      + r.name + ' <span class="muted">('+r.kind+')</span></span>'
+      + '<span class="mono">'+r.state+' · '+fmt(r.position)+'</span></div>').join('');
+    document.getElementById('raw').textContent = JSON.stringify(snap, null, 1).slice(0, 1200);
+  } catch(e) { document.getElementById('state').textContent = '离线'; }
+}
+async function ctl(cmd, extra){
+  await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(Object.assign({cmd}, extra||{}))});
+  refresh();
+}
+function seek(delta){
+  if(!snap) return;
+  ctl('seek',{position: Math.max(0, snap.position + delta)});
+}
+async function loadUri(){
+  const uri = document.getElementById('uri').value.trim();
+  if(!uri) return;
+  await ctl('load',{uri});
+  await ctl('play');
+}
+refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>

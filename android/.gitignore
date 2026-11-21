@@ -1,0 +1,5 @@
+.gradle-home/
+app/build/
+build/
+.gradle/
+local.properties

@@ -1,0 +1,20 @@
+data/
+__pycache__/
+*.pyc
+config.json
+config.local.json
+
+# Android 构建产物
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+*.apk
+
+# 本地工具链（体积大，用 toolchain/*.sh 一键重装）
+toolchain/android-sdk/
+toolchain/jdk17/
+toolchain/gradle-8.7/
+toolchain/gradle-home/
+toolchain/android-user/
+toolchain/downloads/
