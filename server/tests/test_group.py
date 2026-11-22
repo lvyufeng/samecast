@@ -27,6 +27,7 @@ class FakeReceiver(Receiver):
         self.preempted = False
         self.reconnects = 0          # 相当于 App 重启次数（WebReceiver 上报）
         self.cmds: list[str] = []
+        self.seeks: list[float] = []  # seek 目标位置，供手动对齐测试断言
 
     # 指令
     def load(self, uri: str, metadata: str = "") -> None:
@@ -43,6 +44,7 @@ class FakeReceiver(Receiver):
 
     def seek(self, position: float) -> None:
         self.cmds.append("seek")
+        self.seeks.append(position)
 
     def stop(self) -> None:
         self.cmds.append("stop")
@@ -420,6 +422,79 @@ class RejoinTest(unittest.TestCase):
         late = FakeReceiver("tv-b")
         group.add_receiver(late)
         self.assertEqual(late.cmds, [])
+
+
+class ResyncTest(unittest.TestCase):
+    """电视端「同步 → 立即对齐」对应的 group.resync()。"""
+
+    def test_resync_seeks_every_receiver_to_group_position(self) -> None:
+        group, recs = make_group("tv-a", "tv-b", "tv-c")
+        group.seek(42.0)
+        for rec in recs:
+            rec.cmds.clear()
+            rec.seeks.clear()
+        self.assertEqual(group.resync("test"), 3)
+        for rec in recs:
+            self.assertEqual(rec.cmds, ["speed", "seek"])
+            self.assertAlmostEqual(rec.seeks[-1], group.position(), delta=1.0)
+
+    def test_resync_clears_drift_avoiding_immediate_hard_seek(self) -> None:
+        group, recs = make_group("tv-a", "tv-b")
+        # 人为制造一次大偏差：电视位置落后 8 秒
+        recs[0].position = group.position() - 8.0
+        group.tick()
+        recs[0].cmds.clear()
+        group.resync("test")
+        self.assertIn("seek", recs[0].cmds)
+        # 对齐后偏差归零，下一轮 tick 不应再触发硬 seek
+        recs[0].cmds.clear()
+        recs[0].position = group.position()
+        group._grace_until = 0.0
+        group.tick()
+        self.assertNotIn("seek", recs[0].cmds)
+
+    def test_resync_without_media_is_noop(self) -> None:
+        rec = FakeReceiver("tv-a")
+        group = Group([rec])
+        self.assertEqual(group.resync("test"), 0)
+        self.assertEqual(rec.cmds, [])
+
+
+class RestartCleanupTest(unittest.TestCase):
+    """网关重启后整组状态丢了，但电视还在放旧片源时，要通知它回待机页。"""
+
+    def test_stale_playback_reset_when_gateway_has_no_media(self) -> None:
+        recs = [FakeReceiver("tv-a"), FakeReceiver("tv-b")]
+        group = Group(recs)
+        recs[0].state = "playing"
+        recs[0].position = 3227.0
+        recs[1].state = "playing"
+        recs[1].position = 3227.5
+        group.tick()  # 第一轮只记录基线
+        group.tick()
+        self.assertEqual(group.state, STOPPED)
+        self.assertIn("stop", recs[0].cmds)
+        self.assertIn("stop", recs[1].cmds)
+        self.assertEqual(recs[0].state, "idle")
+        self.assertEqual(group.duration, 0.0)
+
+    def test_stale_paused_playback_also_reset(self) -> None:
+        rec = FakeReceiver("tv-a")
+        group = Group([rec])
+        rec.state = "paused"
+        group.tick()
+        group.tick()
+        self.assertIn("stop", rec.cmds)
+
+    def test_media_loaded_after_restart_is_not_stopped(self) -> None:
+        rec = FakeReceiver("tv-a")
+        group = Group([rec])
+        group.load("http://example.com/v2.mp4")
+        rec.cmds.clear()
+        rec.state = "playing"
+        group.tick()
+        group.tick()
+        self.assertNotIn("stop", rec.cmds)
 
 
 if __name__ == "__main__":

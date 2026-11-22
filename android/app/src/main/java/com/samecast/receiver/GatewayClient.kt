@@ -137,6 +137,70 @@ class GatewayClient(
         post("/api/recv/" + receiverId + "/command", cmd)
     }
 
+    /** 网关是否可达（SSDP 已找到并保持轮询）。 */
+    fun isOnline(): Boolean = base != null
+
+    /**
+     * 读取整组状态（GET /api/status）：同步面板拿它算每台电视与整组的时间偏差。
+     * 回调在主线程之外执行，调用方自己 post 回主线程。
+     */
+    fun fetchStatus(callback: (JSONObject?) -> Unit) {
+        val current = base
+        if (current == null) {
+            callback(null)
+            return
+        }
+        thread(name = "gateway-status", isDaemon = true) {
+            val result = try {
+                val conn = URL(current + "/api/status").openConnection() as HttpURLConnection
+                conn.connectTimeout = 2000
+                conn.readTimeout = 2000
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                JSONObject(text)
+            } catch (e: Exception) {
+                Log.d(TAG, "读取整组状态失败: " + e.message)
+                null
+            }
+            callback(result)
+        }
+    }
+
+    /** 整组控制（POST /api/control），{"cmd":"resync"} = 把所有电视拉回同一时刻。 */
+    fun control(cmd: String, callback: (JSONObject?, Boolean) -> Unit) {
+        val current = base
+        if (current == null) {
+            callback(null, false)
+            return
+        }
+        thread(name = "gateway-control", isDaemon = true) {
+            var body: JSONObject? = null
+            var ok = false
+            try {
+                val conn = URL(current + "/api/control").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.connectTimeout = 2000
+                conn.readTimeout = 3000
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use {
+                    it.write(JSONObject().put("cmd", cmd).toString())
+                }
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                body = try {
+                    JSONObject(text)
+                } catch (e: Exception) {
+                    null
+                }
+                ok = true
+            } catch (e: Exception) {
+                Log.w(TAG, "整组控制失败: " + e.message)
+            }
+            callback(body, ok)
+        }
+    }
+
     private fun post(path: String, payload: JSONObject) {
         val current = base ?: return
         thread(isDaemon = true) {

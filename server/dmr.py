@@ -32,7 +32,7 @@ DEVICE_XML = """<?xml version="1.0" encoding="utf-8"?>
     <manufacturerURL>https://github.com/lvyufeng/samecast</manufacturerURL>
     <modelDescription>LAN multi-screen casting gateway</modelDescription>
     <modelName>SameCast</modelName>
-    <modelNumber>0.4.0</modelNumber>
+    <modelNumber>0.5.0</modelNumber>
     <UDN>uuid:{udn}</UDN>
     <dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMR-1.50</dlna:X_DLNADOC>
     <serviceList>

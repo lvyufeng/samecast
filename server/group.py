@@ -243,6 +243,32 @@ class Group:
                 LOG.exception("下发 seek 给 %s 失败", rec.id)
         self._notify()
 
+    def resync(self, source: str = "") -> int:
+        """手动对齐：忽略 seek 冷却和倍速微调，把每台电视直接钉回整组当前位置。"""
+        with self._lock:
+            if not self.uri:
+                return 0
+            target = self.position()
+            recs = list(self.receivers.values())
+            now = time.monotonic()
+            self._grace_until = now + 2.0
+            for rid in list(self.receivers):
+                self._bias.pop(rid, None)
+                self._last_seek[rid] = now
+                self._speed[rid] = 1.0
+            LOG.info("手动对齐到 %.2fs (来源 %s, %d 台)", target, source or "-", len(recs))
+        for rec in recs:
+            try:
+                rec.set_speed(1.0)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                rec.seek(target)
+            except Exception:  # noqa: BLE001
+                LOG.exception("手动对齐 %s 失败", rec.id)
+        self._notify()
+        return len(recs)
+
     def set_volume(self, volume: float, source: str = "") -> None:
         vol = max(0, min(100, int(round(volume))))
         with self._lock:
@@ -434,6 +460,17 @@ class Group:
                 return
             LOG.info("%s 端已掉出播放，重新载入", rid)
             self._reload_receiver(rid, group_state, group_pos)
+        elif not self.uri and state in ("playing", "paused", "buffering"):
+            # 网关重启 / 重装后整组状态丢了，电视却还在放上一路流：
+            # 让它回待机页，避免「控制台显示没在播、电视还在放」的幽灵会话
+            LOG.info("%s 端还在放旧片源（网关无播放任务），通知它回待机页", rid)
+            with self._lock:
+                self.duration = 0.0
+                self._loaded_receivers.discard(rid)
+            try:
+                self.receivers[rid].stop()
+            except Exception:  # noqa: BLE001
+                LOG.exception("通知 %s 停止失败", rid)
 
     def _reset_reload_state(self, rid: str) -> None:
         """清掉某一端除重连计数外的运行时状态（新设备加入 / 它自己重启后重来）。"""

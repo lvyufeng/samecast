@@ -1,4 +1,4 @@
-# 电视端安装指南（微鲸 W40F / 创维 55A3）
+# 电视端安装指南（已在微鲸 W40F / 创维 55A3 验证，任意 Android 电视同理）
 
 每台电视都装自己写的接收端 App（`com.samecast.receiver`），不需要 Kodi；一台起步，更多台同理，都装同一个 APK。
 安装全程通过 adb 完成，**不需要用遥控器点任何确认框**。
@@ -16,17 +16,17 @@
 连上后确认：
 
 ```bash
-toolchain/android-sdk/platform-tools/adb connect <创维 IP>:5555
-toolchain/android-sdk/platform-tools/adb connect <微鲸 IP>:5555
+toolchain/android-sdk/platform-tools/adb connect <电视1 IP>:5555
+toolchain/android-sdk/platform-tools/adb connect <电视2 IP>:5555   # N 台就再连 N-2 条
 toolchain/android-sdk/platform-tools/adb devices
 ```
 
 ## 二、一键静默安装（推荐）
 
 ```bash
-export SAMECAST_DEVICES="<创维 IP>:5555 <微鲸 IP>:5555"
+export SAMECAST_DEVICES="<电视1 IP>:5555 <电视2 IP>:5555 ... <电视N IP>:5555"   # N 台写 N 个
 ./toolchain/install-tv.sh                     # 装到 SAMECAST_DEVICES 里的所有电视并自动启动
-./toolchain/install-tv.sh <微鲸 IP>:5555      # 只装某一台
+./toolchain/install-tv.sh <电视2 IP>:5555      # 只装某一台
 ./toolchain/install-tv.sh --no-start        # 只装不启动
 ```
 
@@ -72,12 +72,18 @@ shell 注入的触摸事件；按键事件才有效。
 
 ```bash
 ADB=toolchain/android-sdk/platform-tools/adb
-$ADB -s <微鲸 IP>:5555 shell dumpsys package com.samecast.receiver | grep versionName
+$ADB -s <电视1 IP>:5555 shell dumpsys package com.samecast.receiver | grep versionName
 curl -s http://<服务器IP>:8090/api/status     # 应能看到每台电视各有状态
 ```
 
 电视端 App 启动后会自动发现局域网里的网关（SSDP 搜索
 `urn:samecast:service:Gateway:1`），并注册成一个接收端，不用手工填 IP。
+
+每台电视都装好、都显示“已连接 SameCast 网关”后，用手机投屏一次即可：
+所有电视同时播放，任意一台按遥控器「确定」暂停，全部一起暂停。
+播放时按任意键呼出底部控制栏，默认高亮播放/暂停：左右选按钮、确定执行，下/返回收起；
+按钮有播放/暂停、快退/快进 10 秒、音量、同步、清晰度、更多，控制栏收起后全屏时左右键才是快退/快进。
+控制栏按钮同样作用于整组，「同步 → 立即对齐」会强制所有电视钉回同一时间点。
 
 ## 四、开机自启
 
@@ -88,7 +94,7 @@ APK 已带 `BootReceiver`：电视开机后收到 `BOOT_COMPLETED` 会自动拉�
 
 ```bash
 ADB=toolchain/android-sdk/platform-tools/adb
-D=<微鲸 IP>:5555
+D=<电视1 IP>:5555
 
 $ADB -s $D shell am start -n com.samecast.receiver/.MainActivity   # 手动启动
 $ADB -s $D shell am force-stop com.samecast.receiver               # 强制停止

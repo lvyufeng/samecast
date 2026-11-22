@@ -18,7 +18,7 @@ from receivers import KodiReceiver, WebReceiver
 from ssdp import SSDPServer
 
 LOG = logging.getLogger("app")
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 电视端 App 用这个 ST 做自动发现，避免在电视上输入 IP
 DISCOVERY_ST = "urn:samecast:service:Gateway:1"
@@ -141,7 +141,7 @@ class App:
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "SameCast/0.4.0"
+    server_version = "SameCast/0.5.0"
 
     # ---- 工具 ----
     @property
@@ -251,6 +251,11 @@ class Handler(BaseHTTPRequestHandler):
                     group.set_volume(float(payload.get("volume") or 0), source="web-ui")
                 elif cmd == "load":
                     group.load(payload.get("uri", ""), payload.get("metadata", ""), source="web-ui")
+                elif cmd == "resync":
+                    # 电视端「同步」面板的「立即对齐」：不看冷却，直接把整组钉回同一位置
+                    snap = group.snapshot()
+                    snap["aligned"] = group.resync(source="web-ui")
+                    return self._json(snap)
                 else:
                     return self._json({"error": "unknown cmd"}, 400)
                 return self._json(group.snapshot())
@@ -289,6 +294,8 @@ class Handler(BaseHTTPRequestHandler):
             group.seek(float(payload.get("position") or 0), source=source)
         elif cmd == "volume":
             group.set_volume(float(payload.get("volume") or 0), source=source)
+        elif cmd == "resync":
+            group.resync(source=source)
 
     def _handle_soap(self, path: str) -> None:
         body = self._read_body()

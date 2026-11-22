@@ -18,11 +18,11 @@
 │ ② 同步控制器  统一时间轴：统一起播位置，小偏差用倍速追平，大偏差才 seek      │
 │ ③ 状态回传    任一台电视暂停/继续 → 广播全组 → 通过 GENA 事件回写手机 UI     │
 └─────────────────────────────────────────────────────────────────────────────┘
-        │                                  │
-   ┌────▼─────┐                      ┌─────▼────┐
-   │ 电视 A   │                      │ 电视 B   │
-   │ 接收端   │                      │ 接收端   │
-   └──────────┘                      └──────────┘
+        │                   │                   │
+   ┌────▼─────┐        ┌────▼─────┐        ┌─────▼────┐
+   │ 电视 1   │        │ 电视 2   │  ...   │ 电视 N   │
+   │ 接收端   │        │ 接收端   │        │ 接收端   │
+   └──────────┘        └──────────┘        └──────────┘
 ```
 
 ## 能做什么
@@ -30,7 +30,9 @@
 - 手机只投一次，N 台电视同时播放（数量不设上限，真机实测 2 台，更多台同理）；
 - 任意一台电视上按暂停 / 继续 / 快进，全组同步，手机上的投屏进度也会跟着变；
 - 服务端不转码：各电视直接拉同一路 CDN 直链，1 核 512MB 的虚拟机就够；
-- 电视端 App 自带待机页和播放信息条（遥控器操作），开机自启，SSDP 自动发现网关（不用在电视上输 IP）；
+- 电视端 App 自带待机页和底部播放控制栏：进度条、播放/暂停、快退/快进 10 秒、音量、**同步**、**清晰度**，遥控器直接操作，开机自启，SSDP 自动发现网关（不用在电视上输 IP）；
+- 「同步」面板能看到每台电视与整组的实时偏差（毫秒级），点「立即对齐」立刻把全组钉回同一位置；
+- 「清晰度」可以限制最高清晰度（自动 / 1080p / 720p / 480p），「更多」里能调画面比例（适应 / 拉伸 / 原始）；
 - 别的投屏 / 别的 App 进来时自动让出画面，不跟系统自带的投屏打架；
 - 手机端零改动、零安装：只要它支持标准 DLNA 投屏。
 
@@ -41,6 +43,21 @@
 | 应用图标 | Android TV 横幅 |
 |:---:|:---:|
 | <img src="docs/screenshots/app_icon.png" width="96" alt="SameCast 应用图标"> | <img src="docs/screenshots/app_banner.png" width="256" alt="SameCast Android TV 横幅"> |
+
+播放时按任意键呼出**底部控制栏**（播放中 4 秒自动收起，暂停时保持显示）：
+
+| 遥控器 | 作用 |
+|:---|:---|
+| 确定 | 执行当前高亮按钮；高亮在播放键上就是全组播放 / 暂停 |
+| 左 / 右 | 控制栏打开时：选择按钮（播放 / 快退 / 快进 / 音量 / 同步 / 清晰度 / 更多）；控制栏收起后（全屏）：快退 / 快进 10 秒 |
+| 上 / 下 | 上回到播放键，下收起控制栏 |
+| 返回 | 关闭面板 / 收起控制栏 |
+| 音量键 | 直接调系统音量 |
+| 同步 | 看到每台电视与整组的偏差，点「立即对齐」立刻钉回同一时间点 |
+| 清晰度 | 自动 / 1080p / 720p / 480p，限制 ExoPlayer 最高分辨率 |
+| 更多 | 画面比例（适应 / 拉伸 / 原始）|
+
+控制栏里的每个按钮都走网关，和手机投屏时的整组操作是同一条链路——不会出现「这台电视自己暂停了、别的还在播」。
 
 ## 为什么需要这个
 
@@ -69,20 +86,20 @@ python3 server/app.py -c config.json
 
 ### 方式 A（推荐）：自研接收端 App
 
-见 [docs/install-tv.md](docs/install-tv.md)。自带待机页/播放信息条、ExoPlayer 硬解、SSDP 自动找网关、
-遥控器「确定」= 全组暂停/播放、开机自启。支持 Android 5.1+（minSdk 21），armv7 / arm64 通用。
+见 [docs/install-tv.md](docs/install-tv.md)。自带待机页和底部播放控制栏、ExoPlayer 硬解、SSDP 自动找网关、
+遥控器「确定」默认是全组暂停/播放，控制栏展开时执行当前高亮按钮；开机自启。支持 Android 5.1+（minSdk 21），armv7 / arm64 通用。
 不想自己编译：直接下 [最新 release](https://github.com/lvyufeng/samecast/releases) 里的 APK（debug 签名，仅供测试），
 或者自己构建（不需要 Android Studio）：
 
 ```bash
 # 构建：Gradle wrapper 自动下载 Gradle，只需要 JDK 17 + Android SDK 34
 source toolchain/env.sh                     # 用项目内自带的 JDK/SDK；本机已装可跳过
-(cd android && ./gradlew assembleDebug)     # 产物：android/app/build/outputs/apk/debug/SameCast-0.4.0-debug.apk
+(cd android && ./gradlew assembleDebug)     # 产物：android/app/build/outputs/apk/debug/SameCast-0.5.0-debug.apk
 
-# 装到电视：全程 adb，不需要遥控器点任何确认框
-export SAMECAST_DEVICES="<电视A IP>:5555 <电视B IP>:5555"
+# 装到电视：全程 adb，不需要遥控器点任何确认框；N 台就写 N 个地址
+export SAMECAST_DEVICES="<电视1 IP>:5555 <电视2 IP>:5555 ... <电视N IP>:5555"
 ./toolchain/install-tv.sh                     # 装到 SAMECAST_DEVICES 里的所有电视
-./toolchain/install-tv.sh <电视B IP>:5555     # 或者只装某一台
+./toolchain/install-tv.sh <电视2 IP>:5555     # 或者只装某一台
 ```
 
 构建只需要 JDK 17 + Android SDK 34；`toolchain/` 里有在 macOS 上一键装好这两样（以及 Gradle）
@@ -172,7 +189,9 @@ samecast/
 ├── android/            # 电视端接收端 App（Kotlin + ExoPlayer）
 ├── deploy/             # systemd 单元 + 一键部署脚本
 ├── toolchain/          # 无 Android Studio 的构建 / 安装工具链
-├── docs/install-tv.md  # 电视端安装、排错、与其他投屏共存
+├── docs/
+│   ├── install-tv.md    # 电视端安装、排错、与其他投屏共存
+│   └── screenshots/     # 电视端界面截图（待机页、应用图标、横幅）
 ├── config.example.json
 ├── docker-compose.yml
 ├── LICENSE

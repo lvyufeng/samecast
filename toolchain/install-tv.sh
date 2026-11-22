@@ -3,11 +3,11 @@
 #
 # 用法:
 #   ./toolchain/install-tv.sh                 # 装到 $SAMECAST_DEVICES 里的电视
-#   ./toolchain/install-tv.sh <电视A IP>:5555 <电视B IP>:5555
+#   ./toolchain/install-tv.sh <电视1 IP>:5555 <电视2 IP>:5555 ... <电视N IP>:5555
 #   ./toolchain/install-tv.sh --no-start      # 只装不启动
 #
 # 电视地址也可以放在环境变量里:
-#   export SAMECAST_DEVICES="<电视A IP>:5555 <电视B IP>:5555"
+#   export SAMECAST_DEVICES="<电视1 IP>:5555 <电视2 IP>:5555 ... <电视N IP>:5555"
 #
 # 说明:
 #   * 走 PackageInstaller 的 session 接口(install-create/write/commit)，
