@@ -4,8 +4,8 @@ plugins {
 }
 
 // 版本号只在这里改，APK 文件名也跟着走：SameCast-<版本>-debug.apk
-val samecastVersionName = "0.3.0"
-val samecastVersionCode = 3
+val samecastVersionName = "0.4.0"
+val samecastVersionCode = 5
 
 android {
     namespace = "com.samecast.receiver"
@@ -37,7 +37,7 @@ android {
     }
 }
 
-// 产物叫 SameCast-0.3.0-debug.apk，而不是默认的 app-debug.apk
+// 产物叫 SameCast-0.4.0-debug.apk，而不是默认的 app-debug.apk
 base {
     archivesName.set("SameCast-$samecastVersionName")
 }

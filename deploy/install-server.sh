@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 把网关装到 Linux 服务器（Debian/Ubuntu 系，systemd）
 #   ./deploy/install-server.sh                  # 装到本机
-#   ./deploy/install-server.sh root@192.168.1.10 # 装到远程机器（需要 ssh 免密）
+#   ./deploy/install-server.sh root@<服务器IP>   # 装到远程机器（需要 ssh 免密）
 set -euo pipefail
 
 TARGET="${1:-}"

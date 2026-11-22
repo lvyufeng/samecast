@@ -32,7 +32,6 @@ class SSDPServer(threading.Thread):
         self.extra_st = extra_st
         self._stop = threading.Event()
         self._sock = None
-        self._send_sock = None
         self._last_usn_by_st: dict[str, int] = {}
 
     # -- 目标设备类型(ST)列表 ------------------------------------------------
@@ -63,11 +62,6 @@ class SSDPServer(threading.Thread):
         sock.settimeout(1.0)
         self._sock = sock
 
-        send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        send.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MULTICAST_TTL)
-        send.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._send_sock = send
-
     def _message(self, kind: str, st: str, usn: str) -> bytes:
         lines = [
             "NOTIFY * HTTP/1.1" if kind != "response" else "HTTP/1.1 200 OK",
@@ -86,11 +80,14 @@ class SSDPServer(threading.Thread):
         return body.encode("utf-8")
 
     def announce(self, nts: str = "ssdp:alive") -> None:
+        sock = self._sock
+        if sock is None:  # 还没启动
+            return
         for st, usn in self._targets():
             msg = self._message(nts, st, usn)
             for _ in range(2):
                 try:
-                    self._send_sock.sendto(msg, (SSDP_ADDR, SSDP_PORT))
+                    sock.sendto(msg, (SSDP_ADDR, SSDP_PORT))
                 except OSError as exc:  # 网卡抖动时忽略
                     LOG.debug("announce failed: %s", exc)
 
@@ -117,13 +114,15 @@ class SSDPServer(threading.Thread):
         # 按 SSDP 规范在 MX 秒内随机延迟回应，避免网络风暴
         if mx_val > 0:
             time.sleep(random.uniform(0.05, min(mx_val, 1.0)))
+        # 用绑定在 1900 的接收 socket 回包：SSDP 规范要求回应来自 1900 端口，
+        # 有些电视（如微鲸）只认这个源端口，用临时端口回它收不到。
         for target_st, usn in matches:
             msg = self._message("response", target_st, usn)
             try:
-                self._send_sock.sendto(msg, addr)
+                self._sock.sendto(msg, addr)
             except OSError as exc:
                 LOG.debug("reply failed: %s", exc)
-        LOG.info("M-SEARCH from %s st=%s -> 已回应", addr[0], st)
+        LOG.info("M-SEARCH from %s:%s st=%s -> 已回应", addr[0], addr[1], st)
 
     def run(self) -> None:
         self._open()
@@ -154,9 +153,9 @@ class SSDPServer(threading.Thread):
             self.announce("ssdp:byebye")
         except Exception:  # noqa: BLE001
             pass
-        for s in (self._sock, self._send_sock):
-            try:
-                if s:
-                    s.close()
-            except OSError:
-                pass
+        sock = self._sock
+        try:
+            if sock:
+                sock.close()
+        except OSError:
+            pass

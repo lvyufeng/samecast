@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  电视端界面：
+  - 待机首页：品牌 + 设备名 + 投屏指引 + 网关连接状态
+  - 播放中：只有画面（不打扰观看），按遥控器「确定」呼出信息条
+  - 暂停 / 被抢占 / 播放失败：居中提示
+-->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -7,17 +13,231 @@
     <androidx.media3.ui.PlayerView
         android:id="@+id/player_view"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:background="@android:color/black" />
 
+    <!-- ===== 待机首页 ===== -->
+    <LinearLayout
+        android:id="@+id/idle_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_idle"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingTop="88dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="0.02"
+            android:text="SameCast"
+            android:textColor="#FFFFFF"
+            android:textSize="62sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="同一部片，多台电视一起看"
+            android:textColor="#7FA6C8"
+            android:textSize="20sp" />
+
+        <TextView
+            android:id="@+id/idle_device"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="26dp"
+            android:textColor="#5F7488"
+            android:textSize="16sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="40dp"
+            android:text="等待手机投屏…"
+            android:textColor="#E8F2FF"
+            android:textSize="30sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="打开手机上的视频 App，点播放页右上角的「投屏」"
+            android:textColor="#9FB4CC"
+            android:textSize="21sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                style="@style/AppChip"
+                android:text="爱奇艺" />
+
+            <TextView
+                style="@style/AppChip"
+                android:text="腾讯视频" />
+
+            <TextView
+                style="@style/AppChip"
+                android:text="优酷" />
+
+            <TextView
+                style="@style/AppChip"
+                android:text="哔哩哔哩" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="选择 SameCast，多台电视同步播放、同步暂停"
+            android:textColor="#8FA3BF"
+            android:textSize="19sp" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="48dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/gateway_dot"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:background="@drawable/dot_warn" />
+
+            <TextView
+                android:id="@+id/gateway_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="9dp"
+                android:text="正在查找 SameCast 网关…"
+                android:textColor="#6F86A0"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/version"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="#46586B"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- ===== 缓冲中 ===== -->
+    <ProgressBar
+        android:id="@+id/loading_spinner"
+        style="?android:attr/progressBarStyle"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center"
+        android:indeterminateTint="#7CE0FF"
+        android:visibility="gone" />
+
+    <!-- ===== 暂停 / 被抢占 / 失败 ===== -->
+    <LinearLayout
+        android:id="@+id/overlay_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#99000000"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/overlay_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="72dp"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:maxLines="2"
+            android:textColor="#F1F7FF"
+            android:textSize="34sp" />
+
+        <TextView
+            android:id="@+id/overlay_hint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="72dp"
+            android:layout_marginTop="14dp"
+            android:gravity="center"
+            android:lineSpacingExtra="6dp"
+            android:textColor="#9FB4CC"
+            android:textSize="18sp" />
+    </LinearLayout>
+
+    <!-- ===== 播放信息条（遥控器确定键呼出，5 秒后自动隐藏） ===== -->
+    <LinearLayout
+        android:id="@+id/hud_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="32dp"
+        android:layout_marginTop="28dp"
+        android:layout_marginEnd="32dp"
+        android:background="@drawable/bg_hud"
+        android:orientation="vertical"
+        android:padding="18dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/hud_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#F1F7FF"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/hud_state"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="#9FB4CC"
+            android:textSize="16sp" />
+
+        <ProgressBar
+            android:id="@+id/hud_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginTop="12dp"
+            android:max="1000"
+            android:progress="0"
+            android:progressTint="#7CE0FF" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="按遥控器「确定」暂停 / 继续 · 其他电视会同步"
+            android:textColor="#6F86A0"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- ===== 底部轻提示 ===== -->
     <TextView
-        android:id="@+id/status"
+        android:id="@+id/toast_view"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom|start"
-        android:layout_margin="24dp"
-        android:background="#88000000"
-        android:padding="10dp"
-        android:textColor="#CCDDEE"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="48dp"
+        android:background="@drawable/bg_toast"
+        android:paddingStart="20dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="10dp"
+        android:textColor="#DCE9F7"
         android:textSize="16sp"
-        android:text="正在启动…" />
+        android:visibility="gone" />
 </FrameLayout>

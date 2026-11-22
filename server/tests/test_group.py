@@ -89,13 +89,13 @@ class PreemptTest(unittest.TestCase):
 
         self.assertEqual(group.state, STOPPED)
         self.assertIn("tv-a", group._preempted)
-        # 两台都收到 stop，一起退出，不留半吊子状态
+        # 所有电视都收到 stop，一起退出，不留半吊子状态
         self.assertIn("stop", recs[0].cmds)
         self.assertIn("stop", recs[1].cmds)
 
     def test_preempted_receiver_not_pulled_back(self) -> None:
         group, recs = make_group("tv-a", "tv-b")
-        # 两台都在播，然后 tv-a 被别的投屏接管
+        # 都在播，然后 tv-a 被别的投屏接管
         for rec in recs:
             rec.state = "playing"
         group.tick()

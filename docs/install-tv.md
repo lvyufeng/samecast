@@ -1,29 +1,32 @@
 # 电视端安装指南（微鲸 W40F / 创维 55A3）
 
-两台电视都装自己写的接收端 App（`com.samecast.receiver`），不需要 Kodi。
+每台电视都装自己写的接收端 App（`com.samecast.receiver`），不需要 Kodi；一台起步，更多台同理，都装同一个 APK。
 安装全程通过 adb 完成，**不需要用遥控器点任何确认框**。
+
+> 下文命令里的 `<创维 IP>` / `<微鲸 IP>` / `<服务器IP>` 都是占位符，换成你自己的地址即可
+> （电视地址在 设置 → 关于 → 状态 里看）。
 
 ## 一、前置：电视开启 adb 调试
 
 | 电视 | 地址 | 系统 | 怎么开 |
 | --- | --- | --- | --- |
-| 创维 55A3 | 192.168.1.31:5555 | Android 9 | 设置 → 关于 → 连点“版本号”进开发者模式；工程模式菜单 `69573028`；小程序 `55559510` 里打开 adb |
-| 微鲸 W40F | 192.168.1.32:5555 | Android 5.1.1 | 设置 → 关于 → 连点版本号 → 开发者选项 → USB/网络调试 |
+| 创维 55A3 | <创维 IP>:5555 | Android 9 | 设置 → 关于 → 连点“版本号”进开发者模式；工程模式菜单 `69573028`；小程序 `55559510` 里打开 adb |
+| 微鲸 W40F | <微鲸 IP>:5555 | Android 5.1.1 | 设置 → 关于 → 连点版本号 → 开发者选项 → USB/网络调试 |
 
 连上后确认：
 
 ```bash
-toolchain/android-sdk/platform-tools/adb connect 192.168.1.31:5555
-toolchain/android-sdk/platform-tools/adb connect 192.168.1.32:5555
+toolchain/android-sdk/platform-tools/adb connect <创维 IP>:5555
+toolchain/android-sdk/platform-tools/adb connect <微鲸 IP>:5555
 toolchain/android-sdk/platform-tools/adb devices
 ```
 
 ## 二、一键静默安装（推荐）
 
 ```bash
-export SAMECAST_DEVICES="192.168.1.31:5555 192.168.1.32:5555"
-./toolchain/install-tv.sh                   # 装到 SAMECAST_DEVICES 里的所有电视并自动启动
-./toolchain/install-tv.sh 192.168.1.32:5555 # 只装某一台
+export SAMECAST_DEVICES="<创维 IP>:5555 <微鲸 IP>:5555"
+./toolchain/install-tv.sh                     # 装到 SAMECAST_DEVICES 里的所有电视并自动启动
+./toolchain/install-tv.sh <微鲸 IP>:5555      # 只装某一台
 ./toolchain/install-tv.sh --no-start        # 只装不启动
 ```
 
@@ -69,8 +72,8 @@ shell 注入的触摸事件；按键事件才有效。
 
 ```bash
 ADB=toolchain/android-sdk/platform-tools/adb
-$ADB -s 192.168.1.32:5555 shell dumpsys package com.samecast.receiver | grep versionName
-curl -s http://192.168.1.10:8090/api/status     # 应能看到两台电视各有状态
+$ADB -s <微鲸 IP>:5555 shell dumpsys package com.samecast.receiver | grep versionName
+curl -s http://<服务器IP>:8090/api/status     # 应能看到每台电视各有状态
 ```
 
 电视端 App 启动后会自动发现局域网里的网关（SSDP 搜索
@@ -85,7 +88,7 @@ APK 已带 `BootReceiver`：电视开机后收到 `BOOT_COMPLETED` 会自动拉�
 
 ```bash
 ADB=toolchain/android-sdk/platform-tools/adb
-D=192.168.1.32:5555
+D=<微鲸 IP>:5555
 
 $ADB -s $D shell am start -n com.samecast.receiver/.MainActivity   # 手动启动
 $ADB -s $D shell am force-stop com.samecast.receiver               # 强制停止

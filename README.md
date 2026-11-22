@@ -27,12 +27,20 @@
 
 ## 能做什么
 
-- 手机只投一次，N 台电视同时播放（电视数量不设上限，实测 2 台）；
+- 手机只投一次，N 台电视同时播放（数量不设上限，真机实测 2 台，更多台同理）；
 - 任意一台电视上按暂停 / 继续 / 快进，全组同步，手机上的投屏进度也会跟着变；
 - 服务端不转码：各电视直接拉同一路 CDN 直链，1 核 512MB 的虚拟机就够；
-- 电视端 App 全屏无 UI，开机自启，SSDP 自动发现网关（不用在电视上输 IP）；
+- 电视端 App 自带待机页和播放信息条（遥控器操作），开机自启，SSDP 自动发现网关（不用在电视上输 IP）；
 - 别的投屏 / 别的 App 进来时自动让出画面，不跟系统自带的投屏打架；
 - 手机端零改动、零安装：只要它支持标准 DLNA 投屏。
+
+## 电视上长什么样
+
+<p align="center"><img src="docs/screenshots/idle.jpg" width="640" alt="电视端待机页：设备名、网关连接状态、支持投屏的 App、版本号"></p>
+
+| 应用图标 | Android TV 横幅 |
+|:---:|:---:|
+| <img src="docs/screenshots/app_icon.png" width="96" alt="SameCast 应用图标"> | <img src="docs/screenshots/app_banner.png" width="256" alt="SameCast Android TV 横幅"> |
 
 ## 为什么需要这个
 
@@ -61,20 +69,20 @@ python3 server/app.py -c config.json
 
 ### 方式 A（推荐）：自研接收端 App
 
-见 [docs/install-tv.md](docs/install-tv.md)。全屏无 UI、ExoPlayer 硬解、SSDP 自动找网关、
+见 [docs/install-tv.md](docs/install-tv.md)。自带待机页/播放信息条、ExoPlayer 硬解、SSDP 自动找网关、
 遥控器「确定」= 全组暂停/播放、开机自启。支持 Android 5.1+（minSdk 21），armv7 / arm64 通用。
-不想自己编译：直接下 [v0.3.0 测试版 APK](https://github.com/lvyufeng/samecast/releases/tag/v0.3.0)（debug 签名，仅供测试），
+不想自己编译：直接下 [最新 release](https://github.com/lvyufeng/samecast/releases) 里的 APK（debug 签名，仅供测试），
 或者自己构建（不需要 Android Studio）：
 
 ```bash
 # 构建：Gradle wrapper 自动下载 Gradle，只需要 JDK 17 + Android SDK 34
 source toolchain/env.sh                     # 用项目内自带的 JDK/SDK；本机已装可跳过
-(cd android && ./gradlew assembleDebug)     # 产物：android/app/build/outputs/apk/debug/SameCast-0.3.0-debug.apk
+(cd android && ./gradlew assembleDebug)     # 产物：android/app/build/outputs/apk/debug/SameCast-0.4.0-debug.apk
 
 # 装到电视：全程 adb，不需要遥控器点任何确认框
-export SAMECAST_DEVICES="192.168.1.31:5555 192.168.1.32:5555"
-./toolchain/install-tv.sh                   # 装到 SAMECAST_DEVICES 里的所有电视
-./toolchain/install-tv.sh 192.168.1.32:5555 # 或者只装某一台
+export SAMECAST_DEVICES="<电视A IP>:5555 <电视B IP>:5555"
+./toolchain/install-tv.sh                     # 装到 SAMECAST_DEVICES 里的所有电视
+./toolchain/install-tv.sh <电视B IP>:5555     # 或者只装某一台
 ```
 
 构建只需要 JDK 17 + Android SDK 34；`toolchain/` 里有在 macOS 上一键装好这两样（以及 Gradle）
@@ -93,7 +101,7 @@ export SAMECAST_DEVICES="192.168.1.31:5555 192.168.1.32:5555"
 3. `config.json` 里加一条：
 
 ```json
-{ "kind": "kodi", "id": "tv1", "name": "客厅电视", "host": "192.168.1.21", "port": 8082 }
+{ "kind": "kodi", "id": "tv1", "name": "客厅电视", "host": "<Kodi 电视 IP>", "port": 8082 }
 ```
 
 ## 部署
@@ -128,7 +136,8 @@ docker compose up -d
 | 问题 | 做法 |
 |---|---|
 | 手机只该看到「一台设备」 | 虚拟出一个 MediaRenderer，整组对它来说就是一端 |
-| 两台电视同时能播 | 两台拉同一路直链；若 CDN 有防盗链/限流，可加本地 HLS 中继（ffmpeg 拉一路、电视拉本地） |
+| 电视端怎么找到网关 | SSDP 组播 M-SEARCH，网关的 200 OK 必须从 UDP 1900 端口发出；用临时端口回包时部分电视（如微鲸 W40F）会直接丢弃，表现就是一直卡在「正在查找网关」 |
+| 多台电视同时能播 | 多台拉同一路直链；若 CDN 有防盗链/限流，可加本地 HLS 中继（ffmpeg 拉一路、电视拉本地） |
 | 起播不同步 | 统一时间轴 + 收到 Play 时下发同一目标位置，各端 seek 对齐 |
 | 进度漂移 | 每 1s 轮询各端进度并学习每台设备的固定延迟基准；残差小于 `smooth_zone`（2s）时用倍速微调（±4%）悄悄追平，超过才 seek，且 seek 有 8s 冷却 |
 | 电视端暂停要联动 | 轮询发现「某端从 playing 变成 paused」且不是本服务下发的（有宽限期防误判）→ 广播全组暂停 |

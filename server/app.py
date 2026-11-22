@@ -18,7 +18,7 @@ from receivers import KodiReceiver, WebReceiver
 from ssdp import SSDPServer
 
 LOG = logging.getLogger("app")
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 电视端 App 用这个 ST 做自动发现，避免在电视上输入 IP
 DISCOVERY_ST = "urn:samecast:service:Gateway:1"
@@ -141,7 +141,7 @@ class App:
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "SameCast/0.3"
+    server_version = "SameCast/0.4.0"
 
     # ---- 工具 ----
     @property

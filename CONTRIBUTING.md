@@ -23,7 +23,7 @@ cd server && python3 -m unittest discover -s tests
 ```bash
 source toolchain/env.sh
 cd android && ./gradlew assembleDebug
-./../toolchain/install-tv.sh <电视IP:5555>   # 静默安装，不需要遥控器确认
+../toolchain/install-tv.sh <电视IP>:5555    # 静默安装，不需要遥控器确认
 ```
 
 ## 提交前检查
