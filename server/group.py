@@ -56,6 +56,7 @@ class Group:
         self.uri = ""
         self.metadata = ""
         self.title = ""
+        self.source = ""
         self.duration = 0.0
         self.volume = 50
         self.state = STOPPED
@@ -142,6 +143,10 @@ class Group:
             self.uri = uri
             self.metadata = metadata or ""
             self.title = _extract_title(metadata) or _guess_name(uri)
+            if source:
+                self.source = source
+            elif changed:
+                self.source = ""
             if changed:
                 self.duration = 0.0
                 self.state = STOPPED
@@ -301,6 +306,7 @@ class Group:
             return {
                 "uri": self.uri,
                 "title": self.title,
+                "source": self.source,
                 "state": self.state,
                 "position": round(self.position(), 2),
                 "duration": round(self.duration, 2),

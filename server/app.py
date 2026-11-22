@@ -295,7 +295,8 @@ class Handler(BaseHTTPRequestHandler):
                 snap = app.group.snapshot()
                 return self._json({"seq": seq, "commands": cmds,
                                    "group": {"state": snap["state"], "position": snap["position"],
-                                             "volume": snap["volume"]}})
+                                             "volume": snap["volume"],
+                                             "source": snap.get("source") or ""}})
             if path == "/api/receivers":
                 return self._json([r.describe() for r in app.receivers.values()])
             if path == "/api/info":

@@ -177,6 +177,8 @@ class MainActivity : Activity() {
 
     // 同步面板数据
     private var tvCount = 1
+    /** 当前这条投屏的来源（phone = 手机投屏，bili = B 站小电视），用来显示顶部一行。 */
+    private var castSource = ""
     private var maxDeviationMs = 0
     private var syncFetching = false
     /** 上一次后台刷新整组信息（台数/偏差）的时间，控制栏打开时低频拉取。 */
@@ -474,9 +476,10 @@ class MainActivity : Activity() {
         progressThumb.translationX = ((width - thumbWidth) * ratio).coerceAtLeast(0f)
     }
 
-    /** 顶部第二行：「来自手机投屏 · N 台电视同步」+ 状态灯 + 同步状态小标签。 */
+    /** 顶部第二行：「来自手机投屏/来自 B 站小电视 · N 台电视同步」+ 状态灯 + 同步状态小标签。 */
     private fun updateTopSyncLine() {
-        topSyncText.text = "来自手机投屏 · " + tvCount.coerceAtLeast(1) + " 台电视同步"
+        val from = if (castSource == "bili") "来自 B 站小电视" else "来自手机投屏"
+        topSyncText.text = from + " · " + tvCount.coerceAtLeast(1) + " 台电视同步"
         topChip.visibility = View.VISIBLE
         when {
             !gatewayOnline -> {
@@ -870,6 +873,7 @@ class MainActivity : Activity() {
         if (snapshot == null) return
         val groupPosition = snapshot.optDouble("position", 0.0)
         val receivers = snapshot.optJSONArray("receivers") ?: return
+        castSource = snapshot.optString("source")
         if (receivers.length() > 0) tvCount = receivers.length()
         var worst = 0
         for (i in 0 until receivers.length()) {
