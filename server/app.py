@@ -12,13 +12,14 @@ import uuid as uuidlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+import bili
 import dmr
 from group import Group
 from receivers import KodiReceiver, WebReceiver
 from ssdp import SSDPServer
 
 LOG = logging.getLogger("app")
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 电视端 App 用这个 ST 做自动发现，避免在电视上输入 IP
 DISCOVERY_ST = "urn:samecast:service:Gateway:1"
@@ -38,8 +39,9 @@ def local_ip() -> str:
 
 
 class App:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, config_path: str = ""):
         self.config = config
+        self.config_path = config_path
         self.port = int(config.get("port", 8090))
         self.ip = config.get("advertise_ip") or local_ip()
         self.base_url = config.get("base_url") or "http://%s:%d" % (self.ip, self.port)
@@ -79,6 +81,11 @@ class App:
             announce_interval=int(config.get("announce_interval", 300)),
             extra_st=config.get("discovery_st", DISCOVERY_ST),
         )
+        self.bili = None
+        try:
+            self.bili = bili.Bili(config.get("bilibili") or {}, on_cookie=self._save_bili_cookie)
+        except Exception:  # noqa: BLE001
+            LOG.exception("B 站模块初始化失败，投屏功能不受影响")
         self.httpd: ThreadingHTTPServer | None = None
 
     def _load_udn(self) -> str:
@@ -120,6 +127,82 @@ class App:
             self.facade.notify_state()
         except Exception:  # noqa: BLE001
             LOG.exception("发送 GENA 事件失败")
+
+    # ---------- B 站「小电视」模拟 ----------
+    def _save_bili_cookie(self, sessdata: str) -> None:
+        """扫码登录成功后，只把 SESSDATA 写进服务器本地 config.json，不外传、不打日志。"""
+        block = self.config.setdefault("bilibili", {})
+        if sessdata:
+            block["sessdata"] = sessdata
+        else:
+            block.pop("sessdata", None)
+        if self.config_path:
+            try:
+                save_config(self.config_path, self.config)
+            except OSError:
+                LOG.exception("保存 SESSDATA 到配置文件失败")
+
+    def _bili_status(self) -> dict:
+        if self.bili is None:
+            return {"ok": False, "error": "B 站模块不可用"}
+        try:
+            info = self.bili.status()
+        except Exception:  # noqa: BLE001
+            LOG.debug("查询 B 站账号状态失败", exc_info=True)
+            info = {"logged_in": False, "uname": "", "vip": False,
+                    "max_quality": "720P", "hint": "查询失败，仍可粘贴链接播放"}
+        info["ok"] = True
+        info["receivers"] = len([r for r in self.receivers.values()])
+        return info
+
+    @staticmethod
+    def _bili_metadata(title: str, quality: str) -> str:
+        import html as _html
+        label = (title or "B 站视频")[:120]
+        if quality:
+            label = label + " [" + quality + "]"
+        safe = _html.escape(label, quote=False)
+        return ('<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"'
+                ' xmlns:dc="http://purl.org/dc/elements/1.1/"'
+                ' xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+                '<item id="samecast-bili" parentID="-1" restricted="1">'
+                '<dc:title>%s</dc:title>'
+                '<upnp:class>object.item.videoItem</upnp:class>'
+                '</item></DIDL-Lite>' % safe)
+
+    def play_bili(self, text: str) -> dict:
+        """解析 B 站链接 → 生成 MPD → 下发给所有电视（服务静态地址，不暴露 CDN 链接）。"""
+        if self.bili is None:
+            return {"ok": False, "error": "服务器没有启用 B 站模块"}
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "error": "请粘贴 B 站视频链接或分享文字"}
+        try:
+            result = self.bili.resolve(text)
+        except bili.BiliError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception:  # noqa: BLE001
+            LOG.exception("解析 B 站链接失败")
+            return {"ok": False, "error": "解析失败，请换个链接再试"}
+        meta = self._bili_metadata(result.get("title") or "", result.get("quality") or "")
+        if result.get("kind") == "file":
+            uri = result.get("url") or ""
+        else:
+            token = self.bili.register_stream(result["mpd"], result)
+            uri = self.base_url + "/api/bili/stream/" + token + ".mpd"
+        if not uri:
+            return {"ok": False, "error": "没有拿到可播放地址"}
+        self.group.load(uri, meta, source="bili")
+        self.group.play(source="bili")
+        LOG.info("B 站播放：%s [%s %dx%d] 共 %d 台", (result.get("title") or "")[:40],
+                 result.get("quality") or "?", int(result.get("width") or 0),
+                 int(result.get("height") or 0), len(self.receivers))
+        return {"ok": True, "title": result.get("title") or "",
+                "quality": result.get("quality") or "", "codec": result.get("codec") or "",
+                "width": int(result.get("width") or 0), "height": int(result.get("height") or 0),
+                "duration": float(result.get("duration") or 0),
+                "receivers": len(self.receivers),
+                "logged_in": self._bili_status().get("logged_in", False)}
 
     def start(self) -> None:
         ThreadingHTTPServer.allow_reuse_address = True
@@ -218,7 +301,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/info":
                 return self._json({"name": app.friendly_name, "version": VERSION,
                                    "discovery_st": DISCOVERY_ST,
+                                   "bilibili": app.bili is not None,
                                    "receivers": [r.describe() for r in app.receivers.values()]})
+            if path == "/api/bili/status":
+                return self._json(app._bili_status())
+            if path.startswith("/api/bili/stream/"):
+                token = path[len("/api/bili/stream/"):].strip("/")
+                if token.endswith(".mpd"):
+                    token = token[:-4]
+                entry = app.bili.get_stream(token) if app.bili is not None else None
+                if not entry:
+                    return self._send(404, b"stream expired")
+                # MPD 里是 B 站 CDN 的限时直链，只给电视端，不写进页面和日志
+                return self._send(200, entry["mpd"].encode("utf-8"),
+                                  "application/dash+xml; charset=utf-8")
             return self._send(404, b"not found")
         except BrokenPipeError:
             pass
@@ -251,6 +347,8 @@ class Handler(BaseHTTPRequestHandler):
                     group.set_volume(float(payload.get("volume") or 0), source="web-ui")
                 elif cmd == "load":
                     group.load(payload.get("uri", ""), payload.get("metadata", ""), source="web-ui")
+                elif cmd == "bili":
+                    return self._json(app.play_bili(payload.get("text") or ""))
                 elif cmd == "resync":
                     # 电视端「同步」面板的「立即对齐」：不看冷却，直接把整组钉回同一位置
                     snap = group.snapshot()
@@ -274,6 +372,38 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 self._apply_remote_command(payload, source=rid)
                 return self._json({"ok": True})
+            if path == "/api/bili/play":
+                payload = self._read_json()
+                return self._json(app.play_bili(payload.get("text") or ""))
+            if path == "/api/bili/qr":
+                if app.bili is None:
+                    return self._json({"ok": False, "error": "服务器没有启用 B 站模块"})
+                try:
+                    data = app.bili.qr_start()
+                except bili.BiliError as exc:
+                    return self._json({"ok": False, "error": str(exc)})
+                except Exception:  # noqa: BLE001
+                    LOG.exception("生成登录二维码失败")
+                    return self._json({"ok": False, "error": "生成登录二维码失败，请稍后再试"})
+                data["ok"] = True
+                return self._json(data)
+            if path == "/api/bili/qr/poll":
+                if app.bili is None:
+                    return self._json({"ok": False, "error": "服务器没有启用 B 站模块"})
+                payload = self._read_json()
+                try:
+                    data = app.bili.qr_poll(payload.get("key") or "")
+                except bili.BiliError as exc:
+                    return self._json({"ok": False, "error": str(exc)})
+                except Exception:  # noqa: BLE001
+                    LOG.exception("查询扫码状态失败")
+                    return self._json({"ok": False, "error": "查询扫码状态失败，请稍后再试"})
+                data["ok"] = True
+                return self._json(data)
+            if path == "/api/bili/logout":
+                if app.bili is not None:
+                    app.bili.logout()  # 会同时清掉配置文件里的 SESSDATA
+                return self._json({"ok": True})
             return self._send(404, b"not found")
         except BrokenPipeError:
             pass
@@ -296,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
             group.set_volume(float(payload.get("volume") or 0), source=source)
         elif cmd == "resync":
             group.resync(source=source)
+        elif cmd == "bili":
+            self.app.play_bili(payload.get("text") or "")
 
     def _handle_soap(self, path: str) -> None:
         body = self._read_body()
@@ -363,6 +495,15 @@ def load_config(path: str) -> dict:
         return json.load(fh)
 
 
+def save_config(path: str, config: dict) -> None:
+    """原子写配置文件（只用于补记 SESSDATA，别把运行态写进去）。"""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(config, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="多台电视同步投屏网关")
     parser.add_argument("-c", "--config", default=os.path.join(BASE_DIR, "..", "config.json"))
@@ -371,7 +512,7 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
                         format="%(asctime)s %(levelname)-7s %(name)-10s %(message)s")
     config = load_config(args.config)
-    app = App(config)
+    app = App(config, args.config)
     try:
         app.start()
     except KeyboardInterrupt:

@@ -4,8 +4,8 @@ plugins {
 }
 
 // 版本号只在这里改，APK 文件名也跟着走：SameCast-<版本>-debug.apk
-val samecastVersionName = "0.5.0"
-val samecastVersionCode = 6
+val samecastVersionName = "0.6.0"
+val samecastVersionCode = 7
 
 android {
     namespace = "com.samecast.receiver"
@@ -45,5 +45,7 @@ base {
 dependencies {
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
+    // B 站高清走 DASH（服务端生成 MPD），电视端用 ExoPlayer 直接放
+    implementation("androidx.media3:media3-exoplayer-dash:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
 }

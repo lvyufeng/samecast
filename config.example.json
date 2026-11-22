@@ -6,6 +6,9 @@
   "seek_cooldown": 8.0,
   "smooth_zone": 2.0,
   "hard_seek_zone": 5.0,
+  "bilibili": {
+    "sessdata": ""
+  },
   "receivers": [
     {
       "kind": "web",

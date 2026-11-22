@@ -25,7 +25,10 @@ import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -71,6 +74,11 @@ class MainActivity : Activity() {
         private const val BUTTON_SYNC = 4
         private const val BUTTON_QUALITY = 5
         private const val BUTTON_MORE = 6
+
+        /** B 站 CDN 会校验 Referer，只对 B 站域名补这个头，别的投屏源一律不动。 */
+        private const val BILI_REFERER = "https://www.bilibili.com/"
+        private const val BILI_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
         private const val PREFS = "receiver"
         private const val KEY_QUALITY = "quality_height"
@@ -197,7 +205,25 @@ class MainActivity : Activity() {
         qualityHeight = prefs.getInt(KEY_QUALITY, 0)
 
         trackSelector = DefaultTrackSelector(this)
-        player = ExoPlayer.Builder(this).setTrackSelector(trackSelector).build()
+        // B 站 CDN 校验 Referer：只对 B 站的域名补请求头，其他投屏源保持原样
+        val httpFactory = DefaultHttpDataSource.Factory()
+        val headers = mapOf(
+            "Referer" to BILI_REFERER,
+            "User-Agent" to BILI_UA,
+            "Accept" to "*/*",
+        )
+        val biliAware = ResolvingDataSource.Factory(httpFactory) { spec ->
+            val host = spec.uri.host ?: ""
+            if (host.contains("bilivideo") || host.contains("bilibili")) {
+                spec.withRequestHeaders(headers)
+            } else {
+                spec
+            }
+        }
+        player = ExoPlayer.Builder(this)
+            .setTrackSelector(trackSelector)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(biliAware))
+            .build()
         // 音频焦点自己管（不让 ExoPlayer 自动处理）：
         // 电视自带的投屏界面 / 其他投屏 App 开始播放时会抢走焦点，
         // 我们收到永久性丢失就把画面让出去，既不会回声也不会和对方来回抢。

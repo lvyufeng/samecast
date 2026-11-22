@@ -51,6 +51,28 @@
   </div>
 
   <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div class="muted">B 站小电视：粘贴视频/番剧链接，服务器直接拉高清流投给所有电视</div>
+      <div class="muted" id="biliWho">—</div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="biliText" placeholder="粘贴 https://www.bilibili.com/video/BV… 或 B 站分享文字">
+      <button class="primary" onclick="biliPlay()">播放</button>
+      <button id="biliLoginBtn" onclick="biliLogin()">登录</button>
+    </div>
+    <div class="muted" id="biliMsg" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card" id="biliQrCard" style="display:none;text-align:center">
+    <div class="row" style="justify-content:space-between">
+      <div class="muted">用「哔哩哔哩」手机 App 扫码登录（只保存在本机配置文件）</div>
+      <button onclick="biliCloseQr()">关闭</button>
+    </div>
+    <div style="margin-top:12px;line-height:0" id="biliQr"></div>
+    <div class="muted" id="biliQrMsg" style="margin-top:10px">等待扫码…</div>
+  </div>
+
+  <div class="card">
     <div class="muted" style="margin-bottom:8px">接收端</div>
     <div id="recvs"></div>
   </div>
@@ -67,6 +89,7 @@
 </div>
 <script>
 let snap = null;
+let biliKey = null, biliTimer = null;
 const KIND_LABEL = { app:'电视', web:'网页', kodi:'Kodi' };
 function fmt(s){ s=Math.max(0,Math.floor(s||0)); const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
   return (h?h+":":"")+(h?String(m).padStart(2,"0"):m)+":"+String(x).padStart(2,"0"); }
@@ -100,7 +123,79 @@ async function loadUri(){
   await ctl('load',{uri});
   await ctl('play');
 }
-refresh(); setInterval(refresh, 1000);
+async function biliStatus(){
+  const who = document.getElementById('biliWho');
+  const btn = document.getElementById('biliLoginBtn');
+  try {
+    const r = await fetch('/api/bili/status'); const s = await r.json();
+    if(!s.ok){ who.textContent = s.error || 'B 站模块不可用'; btn.style.display = 'none'; return; }
+    btn.style.display = '';
+    who.textContent = s.logged_in
+      ? '已登录 ' + (s.uname||'') + (s.vip ? ' · 大会员' : '') + ' · 最高 ' + s.max_quality
+      : s.hint;
+    btn.textContent = s.logged_in ? '退出' : '登录';
+    btn.onclick = s.logged_in ? biliLogout : biliLogin;
+  } catch(e) { who.textContent = 'B 站状态离线'; }
+}
+async function biliPlay(){
+  const text = document.getElementById('biliText').value.trim();
+  const msg = document.getElementById('biliMsg');
+  if(!text){ msg.textContent = '先粘贴一个 B 站链接'; return; }
+  msg.textContent = '正在解析…';
+  try {
+    const r = await fetch('/api/bili/play',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text})});
+    const d = await r.json();
+    if(d.ok){
+      msg.textContent = '已投放：' + d.title + ' [' + d.quality + (d.codec ? ' ' + d.codec : '')
+        + (d.width ? ' ' + d.width + 'x' + d.height : '') + '] · ' + d.receivers + ' 台';
+      refresh();
+    } else { msg.textContent = '失败：' + (d.error || '未知错误'); }
+  } catch(e) { msg.textContent = '请求失败，检查服务器是否在线'; }
+}
+async function biliLogin(){
+  const card = document.getElementById('biliQrCard');
+  const box = document.getElementById('biliQr');
+  const msg = document.getElementById('biliQrMsg');
+  card.style.display = ''; box.innerHTML = ''; msg.textContent = '正在生成二维码…';
+  try {
+    const r = await fetch('/api/bili/qr',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d = await r.json();
+    if(!d.ok){ msg.textContent = d.error || '生成二维码失败'; return; }
+    biliKey = d.key; box.innerHTML = d.svg; msg.textContent = '请用 B 站手机 App 扫码';
+    biliTimer = setInterval(biliPoll, 2000);
+  } catch(e) { msg.textContent = '请求失败，检查服务器是否在线'; }
+}
+async function biliPoll(){
+  const msg = document.getElementById('biliQrMsg');
+  if(!biliKey) return;
+  try {
+    const r = await fetch('/api/bili/qr/poll',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key:biliKey})});
+    const d = await r.json();
+    if(!d.ok){ msg.textContent = d.error || '查询失败'; biliCloseQr(); return; }
+    if(d.status === 'waiting') msg.textContent = '等待扫码…';
+    else if(d.status === 'scanned') msg.textContent = '已扫码，请在手机上确认登录';
+    else if(d.status === 'ok'){
+      biliCloseQr();
+      document.getElementById('biliMsg').textContent = '登录成功' + (d.uname ? '：' + d.uname : '');
+      biliStatus();
+    } else if(d.status === 'expired'){ msg.textContent = '二维码已过期，请重新点「登录」'; }
+    else { msg.textContent = d.message || '登录失败'; }
+  } catch(e) { /* 网络抖动，下一轮再试 */ }
+}
+function biliCloseQr(){
+  if(biliTimer){ clearInterval(biliTimer); biliTimer = null; }
+  biliKey = null;
+  document.getElementById('biliQrCard').style.display = 'none';
+  document.getElementById('biliQr').innerHTML = '';
+}
+async function biliLogout(){
+  await fetch('/api/bili/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  document.getElementById('biliMsg').textContent = '已退出登录，清晰度回到未登录上限';
+  biliStatus();
+}
+refresh(); biliStatus(); setInterval(refresh, 1000); setInterval(biliStatus, 30000);
 </script>
 </body>
 </html>
