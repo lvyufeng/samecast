@@ -3,6 +3,7 @@
 [![服务端测试](https://github.com/lvyufeng/samecast/actions/workflows/tests.yml/badge.svg)](https://github.com/lvyufeng/samecast/actions/workflows/tests.yml)
 [![Docker 镜像](https://github.com/lvyufeng/samecast/actions/workflows/docker.yml/badge.svg)](https://github.com/lvyufeng/samecast/actions/workflows/docker.yml)
 [![Android 构建](https://github.com/lvyufeng/samecast/actions/workflows/android.yml/badge.svg)](https://github.com/lvyufeng/samecast/actions/workflows/android.yml)
+[![Release](https://img.shields.io/github/v/release/lvyufeng/samecast?label=release)](https://github.com/lvyufeng/samecast/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 手机在任意支持 DLNA 的投屏 App 里点「投屏」，搜到一台虚拟设备（默认叫 **SameCast**）；
@@ -27,7 +28,7 @@
 
 ## 能做什么
 
-- 手机只投一次，N 台电视同时播放（数量不设上限，真机实测 2 台，更多台同理）；
+- 手机只投一次，N 台电视同时播放（数量不设上限，家里几台电视就装几个接收端，3 台、4 台、更多都一样）；
 - 任意一台电视上按暂停 / 继续 / 快进，全组同步，手机上的投屏进度也会跟着变；
 - 服务端不转码：各电视直接拉同一路 CDN 直链，1 核 512MB 的虚拟机就够；
 - 电视端 App 自带待机页和底部播放控制栏：进度条、播放/暂停、快退/快进 10 秒、音量、**同步**、**清晰度**，遥控器直接操作，开机自启，SSDP 自动发现网关（不用在电视上输 IP）；
@@ -77,8 +78,8 @@ python3 server/app.py -c config.json
 ```
 
 1. 打开 `http://<本机IP>:8090/` → 控制台（可粘一个 m3u8/mp4 直链测试）；
-2. 另开两个窗口：`http://<本机IP>:8090/tv?id=tv1`、`...?id=tv2` → 两个「电视」；
-3. 控制台点「载入并播放」，两个窗口同时播放；在任一窗口按空格暂停，另一边也会暂停。
+2. 另开几个窗口：`http://<本机IP>:8090/tv?id=tv1`、`...?id=tv2`、`...?id=tv3` → 每开一个就是一个「电视」，开几个都行；
+3. 控制台点「载入并播放」，所有窗口同时播放；在任一窗口按空格暂停，全部一起暂停。
 
 > 网页接收端是协议原型，方便在没有电视时调试服务端；真实电视请用下面的接收端 App。
 
@@ -218,7 +219,7 @@ cd server && python3 -m unittest discover -s tests
 
 ## 路线图
 
-- [ ] 电视端上架 / 提供预编译 APK 下载（目前需自行构建）
+- [x] 电视端提供预编译 APK 下载（debug 签名，见 [Releases](https://github.com/lvyufeng/samecast/releases)）
 - [ ] AirPlay、Chromecast 门面（让 iPhone 系统投屏也走同一套同步）
 - [ ] 服务端本地 HLS 中继，解决 CDN 防盗链 / 限流
 - [ ] 分电视音量与延迟微调（每台设备不同的音频延迟补偿）

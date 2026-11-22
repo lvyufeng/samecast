@@ -627,7 +627,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="7dp"
-            android:text="自适应片源限制最高清晰度，两台电视一起切"
+            android:text="自适应限制片源最高清晰度，所有电视一起切换"
             android:textColor="#9FB4CC"
             android:textSize="12sp" />
 
