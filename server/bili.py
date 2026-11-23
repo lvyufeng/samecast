@@ -369,42 +369,57 @@ class Bili:
         raise BiliError("这部番剧还没有可播放的集数")
 
     # ---- 播放地址 ----
-    def playurl_video(self, bvid: str, cid: int) -> dict:
-        params = {"bvid": bvid, "cid": int(cid), "qn": 120, "fnver": 0,
+    def playurl_video(self, bvid: str, cid: int, qn: int = 120) -> dict:
+        params = {"bvid": bvid, "cid": int(cid), "qn": int(qn), "fnver": 0,
                   "fnval": 4048, "fourk": 1, "platform": "pc", "otype": "json"}
         data = self._api("/x/player/playurl", params,
                          referer="https://www.bilibili.com/video/%s" % bvid)
         return data.get("data") or {}
 
-    def playurl_pgc(self, ep_id: int) -> dict:
+    def playurl_aid(self, aid: int, cid: int, qn: int = 120) -> dict:
+        """手机 App 走 bilibili:// 私有协议投屏时只给 aid/cid，没有 bvid。"""
+        params = {"avid": int(aid), "cid": int(cid), "qn": int(qn), "fnver": 0,
+                  "fnval": 4048, "fourk": 1, "platform": "pc", "otype": "json"}
+        data = self._api("/x/player/playurl", params,
+                         referer="https://www.bilibili.com/video/av%d" % int(aid))
+        return data.get("data") or {}
+
+    def playurl_pgc(self, ep_id: int, qn: int = 120) -> dict:
         url = "https://api.bilibili.com/pgc/player/web/playurl"
-        params = {"ep_id": int(ep_id), "qn": 120, "fnver": 0, "fnval": 4048, "fourk": 1}
+        params = {"ep_id": int(ep_id), "qn": int(qn), "fnver": 0, "fnval": 4048, "fourk": 1}
         data = self._api(url, params,
                          referer="https://www.bilibili.com/bangumi/play/ep%s" % ep_id)
         return data.get("result") or data.get("data") or {}
 
-    def playurl_html5(self, bvid: str, cid: int) -> dict:
+    def playurl_html5(self, bvid: str, cid: int, qn: int = 120) -> dict:
         """网页版单文件通道：不登录也能拿到 1080P，音视频已封装在同一个 mp4 里。"""
-        params = {"bvid": bvid, "cid": int(cid), "qn": 120, "fnver": 0,
+        params = {"bvid": bvid, "cid": int(cid), "qn": int(qn), "fnver": 0,
                   "fnval": 16, "fourk": 1, "platform": "html5", "high_quality": 1}
         data = self._api("/x/player/playurl", params,
                          referer="https://www.bilibili.com/video/%s" % bvid)
         return data.get("data") or {}
 
-    def playurl_pgc_html5(self, ep_id: int) -> dict:
+    def playurl_aid_html5(self, aid: int, cid: int, qn: int = 120) -> dict:
+        params = {"avid": int(aid), "cid": int(cid), "qn": int(qn), "fnver": 0,
+                  "fnval": 16, "fourk": 1, "platform": "html5", "high_quality": 1}
+        data = self._api("/x/player/playurl", params,
+                         referer="https://www.bilibili.com/video/av%d" % int(aid))
+        return data.get("data") or {}
+
+    def playurl_pgc_html5(self, ep_id: int, qn: int = 120) -> dict:
         url = "https://api.bilibili.com/pgc/player/web/playurl"
-        params = {"ep_id": int(ep_id), "qn": 120, "fnver": 0, "fnval": 16, "fourk": 1,
+        params = {"ep_id": int(ep_id), "qn": int(qn), "fnver": 0, "fnval": 16, "fourk": 1,
                   "platform": "html5", "high_quality": 1}
         data = self._api(url, params,
                          referer="https://www.bilibili.com/bangumi/play/ep%s" % ep_id)
         return data.get("result") or data.get("data") or {}
 
     # ---- 选流 ----
-    def pick_video(self, dash: dict) -> dict:
+    def pick_video(self, dash: dict, max_height: int = 0) -> dict:
         videos = [item for item in (dash.get("video") or []) if item.get("baseUrl") or item.get("base_url")]
         if not videos:
             raise BiliError("这个视频没有可用的 DASH 画面")
-        limit = self.max_height if self.max_height > 0 else 10000
+        limit = max_height or (self.max_height if self.max_height > 0 else 10000)
         inside = [item for item in videos if int(item.get("height") or 0) <= limit]
         pool = inside or videos
         preferred = self.preferred_codec
@@ -452,8 +467,9 @@ class Bili:
             codecs = default
         return str(codecs).split(",")[0]
 
-    def build_mpd(self, dash: dict, duration: float, title: str = "") -> tuple[str, dict, dict | None]:
-        video = self.pick_video(dash)
+    def build_mpd(self, dash: dict, duration: float, title: str = "",
+                  max_height: int = 0) -> tuple[str, dict, dict | None]:
+        video = self.pick_video(dash, max_height)
         audio = self.pick_audio(dash)
         total = float(dash.get("duration") or duration or 0)
         video_url = video.get("baseUrl") or video.get("base_url") or ""
@@ -505,19 +521,66 @@ class Bili:
         kind = target["kind"]
         if kind == "ep":
             meta = self.pgc_info(target["ep_id"])
-            dash_play = lambda: self.playurl_pgc(target["ep_id"])  # noqa: E731
-            web_play = lambda: self.playurl_pgc_html5(target["ep_id"])  # noqa: E731
-        elif kind == "ss":
+            return self._resolve_stream(
+                meta, lambda: self.playurl_pgc(target["ep_id"]),
+                lambda: self.playurl_pgc_html5(target["ep_id"]))
+        if kind == "ss":
             ep_id = self.season_first_ep(target["season_id"])
             meta = self.pgc_info(ep_id)
-            dash_play = lambda: self.playurl_pgc(ep_id)  # noqa: E731
-            web_play = lambda: self.playurl_pgc_html5(ep_id)  # noqa: E731
-        else:
-            meta = self.video_info(bvid=target.get("bvid"), aid=target.get("aid"),
-                                   page=target.get("page", 1))
-            bvid, cid = meta["bvid"], meta["cid"]
-            dash_play = lambda: self.playurl_video(bvid, cid)  # noqa: E731
-            web_play = lambda: self.playurl_html5(bvid, cid)  # noqa: E731
+            return self._resolve_stream(
+                meta, lambda: self.playurl_pgc(ep_id),
+                lambda: self.playurl_pgc_html5(ep_id))
+        meta = self.video_info(bvid=target.get("bvid"), aid=target.get("aid"),
+                               page=target.get("page", 1))
+        return self._resolve_video(meta)
+
+    def resolve_aid(self, aid: int) -> dict:
+        """手机 App 投屏时只递过来 aid，用它换回最高清晰度的播放地址。"""
+        self.ensure_buvid()
+        meta = self.video_info(aid=int(aid))
+        return self._resolve_video(meta)
+
+    def resolve_cast(self, target: dict, qn: int = 0) -> dict:
+        """手机 App 私有协议投屏：target 是从 nva_ext 里解出来的视频标识。
+
+        与网页链路的区别是 App 只给 aid/cid/epId，没有 bvid / 分集号；
+        清晰度由 App 传来的 userDesireQn 决定，没传就按最高可取。
+        """
+        self.ensure_buvid()
+        qn = int(qn or 0)
+        height = QUALITY_HEIGHT.get(qn, 0)
+        play_qn = qn or 120
+        ep_id = int(target.get("ep_id") or 0)
+        season_id = int(target.get("season_id") or 0)
+        if not ep_id and season_id:
+            ep_id = self.season_first_ep(season_id)
+        if ep_id:
+            meta = self.pgc_info(ep_id)
+            meta.setdefault("ep_id", ep_id)
+            return self._resolve_stream(
+                meta, lambda: self.playurl_pgc(ep_id, play_qn),
+                lambda: self.playurl_pgc_html5(ep_id, play_qn), max_height=height)
+        bvid = str(target.get("bvid") or "")
+        aid = int(target.get("aid") or 0)
+        if not (bvid or aid):
+            raise BiliError("手机投屏地址里没有视频编号")
+        meta = self.video_info(bvid=bvid or None, aid=aid or None)
+        cid = int(target.get("cid") or 0) or int(meta.get("cid") or 0)
+        if not cid:
+            raise BiliError("这个视频没有可播放的分集")
+        bvid = meta["bvid"]
+        return self._resolve_stream(
+            meta, lambda: self.playurl_video(bvid, cid, play_qn),
+            lambda: self.playurl_html5(bvid, cid, play_qn), max_height=height)
+
+    def _resolve_video(self, meta: dict) -> dict:
+        bvid, cid = meta["bvid"], meta["cid"]
+        return self._resolve_stream(
+            meta, lambda: self.playurl_video(bvid, cid),
+            lambda: self.playurl_html5(bvid, cid))
+
+    def _resolve_stream(self, meta: dict, dash_play, web_play,
+                        max_height: int = 0) -> dict:
         # 登录后 DASH 码率更高（大会员还能 4K）；没登录走网页版单文件，最高 1080P
         modes = ("dash", "web") if self.logged_in() else ("web", "dash")
         errors = []
@@ -527,18 +590,20 @@ class Bili:
             except BiliError as exc:
                 errors.append(str(exc))
                 continue
-            result = self._dash_result(play, meta) or self._file_result(play, meta)
+            result = (self._dash_result(play, meta, max_height)
+                      or self._file_result(play, meta))
             if result:
                 return result
         LOG.warning("B 站取流失败：%s", "；".join(errors) or "没有可用地址")
         raise BiliError("这个视频拿不到可播放地址（可能是付费/大会员内容，或需要登录）")
 
-    def _dash_result(self, play: dict, meta: dict) -> dict | None:
+    def _dash_result(self, play: dict, meta: dict, max_height: int = 0) -> dict | None:
         dash = play.get("dash") or {}
         if not dash.get("video"):
             return None
         duration = float(play.get("timelength") or 0) / 1000.0 or float(meta.get("duration") or 0)
-        mpd, video, audio = self.build_mpd(dash, duration, meta.get("title") or "")
+        mpd, video, audio = self.build_mpd(dash, duration, meta.get("title") or "",
+                                           max_height)
         quality_id = int(video.get("id") or 0)
         label = QUALITY_LABEL.get(quality_id) or ("%dP" % int(video.get("height") or 0))
         codec = CODEC_LABEL.get(int(video.get("codecid") or 0)) or ""

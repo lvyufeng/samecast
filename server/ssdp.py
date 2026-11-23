@@ -33,6 +33,25 @@ class SSDPServer(threading.Thread):
         self._stop = threading.Event()
         self._sock = None
         self._last_usn_by_st: dict[str, int] = {}
+        self._unknown_st: set[str] = set()
+
+    # 手机端 App（B 站/爱奇艺/优酷等）可能只搜这些类型，统一应答
+    COMPAT_ST = (
+        "urn:schemas-upnp-org:device:MediaRenderer:1",
+        "urn:schemas-upnp-org:device:MediaRenderer:2",
+        "urn:schemas-upnp-org:device:MediaRenderer:3",
+        "urn:schemas-upnp-org:service:AVTransport:1",
+        "urn:schemas-upnp-org:service:AVTransport:2",
+        "urn:schemas-upnp-org:service:RenderingControl:1",
+        "urn:schemas-upnp-org:service:RenderingControl:2",
+        "urn:schemas-upnp-org:service:ConnectionManager:1",
+        "urn:schemas-upnp-org:service:ConnectionManager:2",
+        "urn:dial-multiscreen-org:service:dial:1",
+        # B 站小电视：云视听小电视用这个私有服务类型识别「小电视」，扫到才显示小电视图标并走官方高清投屏
+        "urn:app-bilibili-com:service:NirvanaControl:3",
+        "urn:app-bilibili-com:service:NirvanaControl:2",
+        "urn:app-bilibili-com:service:NirvanaControl:1",
+    )
 
     # -- 目标设备类型(ST)列表 ------------------------------------------------
     def _targets(self) -> list[tuple[str, str]]:
@@ -42,6 +61,11 @@ class SSDPServer(threading.Thread):
         out.append((self.device_type, self.udn + "::" + self.device_type))
         for svc in self.services:
             out.append((svc, self.udn + "::" + svc))
+        # 兼容 ST：部分国产 App 只查旧版本设备/服务类型，全部应答能明显提高发现率
+        seen = {item[0] for item in out}
+        for st in self.COMPAT_ST:
+            if st not in seen:
+                out.append((st, self.udn + "::" + st))
         if self.extra_st:
             # 给自研接收端 App 用的私有发现类型
             out.append((self.extra_st, self.udn + "::" + self.extra_st))
@@ -70,7 +94,7 @@ class SSDPServer(threading.Thread):
             "DATE: " + time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime()),
             "EXT:",
             "LOCATION: " + self.location,
-            "SERVER: Linux/5.0 UPnP/1.0 SameCast/1.0",
+            "SERVER: Linux/3.0.0, UPnP/1.0, Platinum/1.0.5.13",
             "ST: " + st,
             "USN: " + usn,
             "NT: " + st if kind != "response" else None,
@@ -110,6 +134,12 @@ class SSDPServer(threading.Thread):
         targets = self._targets()
         matches = [t for t in targets if st == "ssdp:all" or st == t[0]]
         if not matches:
+            # 没匹配到的 ST 只记一次，方便排查「手机 App 搜不到」的问题
+            if st not in self._unknown_st:
+                self._unknown_st.add(st)
+                LOG.info("M-SEARCH from %s st=%s ua=%s -> 未匹配",
+                         addr[0], st[:70] or "(空)",
+                         (headers.get("USER-AGENT") or "")[:40])
             return
         # 按 SSDP 规范在 MX 秒内随机延迟回应，避免网络风暴
         if mx_val > 0:
@@ -122,7 +152,8 @@ class SSDPServer(threading.Thread):
                 self._sock.sendto(msg, addr)
             except OSError as exc:
                 LOG.debug("reply failed: %s", exc)
-        LOG.info("M-SEARCH from %s:%s st=%s -> 已回应", addr[0], addr[1], st)
+        LOG.info("M-SEARCH from %s:%s st=%s ua=%s -> 已回应", addr[0], addr[1], st,
+                 (headers.get("USER-AGENT") or "")[:30])
 
     def run(self) -> None:
         self._open()

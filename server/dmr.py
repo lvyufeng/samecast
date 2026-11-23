@@ -8,11 +8,15 @@ import urllib.request
 import uuid as uuidlib
 import xml.etree.ElementTree as ET
 
+import nirvana
+
 LOG = logging.getLogger("dmr")
 
 AVT = "urn:schemas-upnp-org:service:AVTransport:1"
 RCS = "urn:schemas-upnp-org:service:RenderingControl:1"
 CMS = "urn:schemas-upnp-org:service:ConnectionManager:1"
+# B 站私有服务：设备描述里带上它，手机 App 才会把 SameCast 认成「小电视」
+NVA = nirvana.SERVICE_TYPE
 NS_SOAP = "http://schemas.xmlsoap.org/soap/envelope/"
 NS_ENC = "http://schemas.xmlsoap.org/soap/encoding/"
 
@@ -20,42 +24,76 @@ SERVICE_PATHS = {
     AVT: "/AVTransport",
     RCS: "/RenderingControl",
     CMS: "/ConnectionManager",
+    NVA: nirvana.SERVICE_PATH,
+}
+
+# 路径沿用真实小电视的结构：/bilibili/<服务>/<token>/<文件>，
+# 老的 /<服务>/<文件> 也继续提供服务，避免已经缓存的设备描述失效。
+_SERVICE_BY_NAME = {
+    "AVTransport": AVT,
+    "RenderingControl": RCS,
+    "ConnectionManager": CMS,
+    "NirvanaControl": NVA,
+}
+_PATH_KINDS = {
+    "scpd.xml": "scpd",
+    "control.xml": "soap",
+    "event.xml": "gena",
+    # 老路径（没有 /bilibili 前缀、不带 .xml）继续兼容，避免缓存描述失效
+    "scpd": "scpd",
+    "control": "soap",
+    "event": "gena",
 }
 
 DEVICE_XML = """<?xml version="1.0" encoding="utf-8"?>
-<root xmlns="urn:schemas-upnp-org:device-1-0">
+<root configId="8693519" xmlns="urn:schemas-upnp-org:device-1-0" xmlns:dlna="urn:schemas-dlna-org:device-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
   <device>
     <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
     <friendlyName>{friendly_name}</friendlyName>
-    <manufacturer>SameCast</manufacturer>
-    <manufacturerURL>https://github.com/lvyufeng/samecast</manufacturerURL>
-    <modelDescription>LAN multi-screen casting gateway</modelDescription>
-    <modelName>SameCast</modelName>
-    <modelNumber>0.5.0</modelNumber>
+    <manufacturer>Bilibili Inc.</manufacturer>
+    <manufacturerURL>https://bilibili.com/</manufacturerURL>
+    <modelDescription>云视听小电视</modelDescription>
+    <modelName>W40F</modelName>
+    <X_brandName>apollo</X_brandName>
+    <hostVersion>22</hostVersion>
+    <modelNumber>1024</modelNumber>
+    <serialNumber>1024</serialNumber>
+    <ottVersion>108300</ottVersion>
+    <channelName>weijing</channelName>
+    <capability>255</capability>
+    <modelURL>https://app.bilibili.com/</modelURL>
     <UDN>uuid:{udn}</UDN>
-    <dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMR-1.50</dlna:X_DLNADOC>
+    <dlna:X_DLNADOC>DMR-1.50</dlna:X_DLNADOC>
+    <dlna:X_DLNACAP>playcontainer-1-0</dlna:X_DLNACAP>
     <serviceList>
       <service>
         <serviceType>{avt}</serviceType>
         <serviceId>urn:upnp-org:serviceId:AVTransport</serviceId>
-        <SCPDURL>/AVTransport/scpd.xml</SCPDURL>
-        <controlURL>/AVTransport/control</controlURL>
-        <eventSubURL>/AVTransport/event</eventSubURL>
+        <SCPDURL>/bilibili/AVTransport/{token}/scpd.xml</SCPDURL>
+        <controlURL>/bilibili/AVTransport/{token}/control.xml</controlURL>
+        <eventSubURL>/bilibili/AVTransport/{token}/event.xml</eventSubURL>
       </service>
       <service>
         <serviceType>{rcs}</serviceType>
         <serviceId>urn:upnp-org:serviceId:RenderingControl</serviceId>
-        <SCPDURL>/RenderingControl/scpd.xml</SCPDURL>
-        <controlURL>/RenderingControl/control</controlURL>
-        <eventSubURL>/RenderingControl/event</eventSubURL>
+        <SCPDURL>/bilibili/RenderingControl/{token}/scpd.xml</SCPDURL>
+        <controlURL>/bilibili/RenderingControl/{token}/control.xml</controlURL>
+        <eventSubURL>/bilibili/RenderingControl/{token}/event.xml</eventSubURL>
       </service>
       <service>
         <serviceType>{cms}</serviceType>
         <serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId>
-        <SCPDURL>/ConnectionManager/scpd.xml</SCPDURL>
-        <controlURL>/ConnectionManager/control</controlURL>
-        <eventSubURL>/ConnectionManager/event</eventSubURL>
+        <SCPDURL>/bilibili/ConnectionManager/{token}/scpd.xml</SCPDURL>
+        <controlURL>/bilibili/ConnectionManager/{token}/control.xml</controlURL>
+        <eventSubURL>/bilibili/ConnectionManager/{token}/event.xml</eventSubURL>
+      </service>
+      <service>
+        <serviceType>{nva}</serviceType>
+        <serviceId>{nva_id}</serviceId>
+        <SCPDURL>/bilibili/NirvanaControl/{token}/scpd.xml</SCPDURL>
+        <controlURL>/bilibili/NirvanaControl/{token}/control.xml</controlURL>
+        <eventSubURL>/bilibili/NirvanaControl/{token}/event.xml</eventSubURL>
       </service>
     </serviceList>
   </device>
@@ -63,10 +101,21 @@ DEVICE_XML = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-def _arg(name: str, direction: str, related: str) -> str:
-    return ("<argument><name>%s</name><direction>%s</direction>"
-            "<relatedStateVariable>%s</relatedStateVariable></argument>"
-            % (name, direction, related))
+def parse_service_path(path: str):
+    """把 /AVTransport/control 或 /bilibili/AVTransport/<token>/control.xml 归一成 (服务, 类型)。
+
+    类型是 scpd / soap / gena 之一；认不出来返回 (None, None)。
+    """
+    parts = [p for p in (path or "").split("?")[0].split("/") if p]
+    if len(parts) > 1 and parts[0] == "bilibili":
+        parts = parts[1:]
+    if len(parts) < 2:
+        return None, None
+    service = _SERVICE_BY_NAME.get(parts[0])
+    kind = _PATH_KINDS.get(parts[-1])
+    if service is None or kind is None:
+        return None, None
+    return service, kind
 
 
 def _var(name: str, dtype: str, events: str = "no", allowed: str = "") -> str:
@@ -101,6 +150,12 @@ SCPD_AVT = """<?xml version="1.0" encoding="utf-8"?>
   </serviceStateTable>
 </scpd>
 """
+
+
+def _arg(name: str, direction: str, related: str) -> str:
+    return ("<argument><name>%s</name><direction>%s</direction>"
+            "<relatedStateVariable>%s</relatedStateVariable></argument>"
+            % (name, direction, related))
 
 
 def build_avt_scpd() -> str:
@@ -321,11 +376,68 @@ class DmrFacade:
         self._subscribers: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._seq = 0
+        # 手机投屏接管钩子：callable(uri, metadata) -> bool，返回 True 表示地址已被服务端接管
+        self.on_cast = None
+        # 当前投屏来源标签（phone / bili），用于电视端顶部显示
+        self._cast_source = "phone"
+        # 小电视 NirvanaControl 的宿主机回调，由 app.py 注入
+        self.on_bili_signed_in = None
+        self.on_bili_vip = None
+        self.on_mirror_url = None
+        self.on_bili_play_info = None
+        self.on_bili_quality = None
+
+    # ---- 小电视（NirvanaControl）宿主机回调 ------------------------------
+    def bili_signed_in(self) -> bool:
+        if self.on_bili_signed_in is None:
+            return False
+        try:
+            return bool(self.on_bili_signed_in())
+        except Exception:  # noqa: BLE001 - 小电视查询不能因为登录态异常而失败
+            LOG.exception("读取 B 站登录态失败")
+            return False
+
+    def bili_vip(self) -> bool:
+        if self.on_bili_vip is None:
+            return False
+        try:
+            return bool(self.on_bili_vip())
+        except Exception:  # noqa: BLE001
+            LOG.exception("读取 B 站会员状态失败")
+            return False
+
+    def mirror_url(self) -> str:
+        if self.on_mirror_url is None:
+            return ""
+        try:
+            return str(self.on_mirror_url() or "")
+        except Exception:  # noqa: BLE001
+            LOG.exception("生成镜像投屏地址失败")
+            return ""
+
+    def bili_play_info(self) -> dict:
+        if self.on_bili_play_info is None:
+            return {}
+        try:
+            return self.on_bili_play_info() or {}
+        except Exception:  # noqa: BLE001
+            LOG.exception("读取 B 站播放信息失败")
+            return {}
+
+    def bili_switch_quality(self, qn: int) -> None:
+        if self.on_bili_quality is None:
+            return
+        try:
+            self.on_bili_quality(qn)
+        except Exception:  # noqa: BLE001
+            LOG.exception("切换 B 站清晰度失败")
 
     # ---- 描述 -----------------------------------------------------------
     def device_xml(self) -> bytes:
         return DEVICE_XML.format(friendly_name=escape(self.friendly_name), udn=self.udn,
-                                 avt=AVT, rcs=RCS, cms=CMS).encode("utf-8")
+                                 token=self.udn, avt=AVT, rcs=RCS, cms=CMS,
+                                 nva=nirvana.SERVICE_TYPE,
+                                 nva_id=nirvana.SERVICE_ID).encode("utf-8")
 
     def scpd(self, service_type: str) -> bytes:
         if service_type == AVT:
@@ -334,11 +446,15 @@ class DmrFacade:
             return build_rcs_scpd().encode("utf-8")
         if service_type == CMS:
             return build_cms_scpd().encode("utf-8")
+        if service_type == NVA:
+            return nirvana.scpd()
         raise KeyError(service_type)
 
     # ---- SOAP 动作 -------------------------------------------------------
     def handle(self, service_type: str, action: str, args: dict) -> dict | None:
         g = self.group
+        if service_type == NVA:
+            return nirvana.handle(action, args, self)
         if service_type == CMS:
             if action == "GetProtocolInfo":
                 return {"SourceProtocolInfo": "", "SinkProtocolInfo": SINK_PROTOCOL_INFO}
@@ -354,7 +470,7 @@ class DmrFacade:
             if action == "GetVolume":
                 return {"CurrentVolume": str(int(g.volume))}
             if action == "SetVolume":
-                g.set_volume(float(args.get("DesiredVolume") or 0), source="phone")
+                g.set_volume(float(args.get("DesiredVolume") or 0), source=self._cast_source)
                 return {}
             if action == "GetMute":
                 return {"CurrentMute": "0"}
@@ -366,25 +482,38 @@ class DmrFacade:
 
         if service_type == AVT:
             if action == "SetAVTransportURI":
-                g.load(args.get("CurrentURI", ""), args.get("CurrentURIMetaData", ""), source="phone")
+                uri = args.get("CurrentURI", "")
+                meta = args.get("CurrentURIMetaData", "")
+                taken = False
+                if self.on_cast is not None:
+                    try:
+                        taken = bool(self.on_cast(uri, meta))
+                    except Exception:  # noqa: BLE001 - 接管失败不能影响正常投屏
+                        LOG.exception("接管手机投屏失败，回退手机原始地址")
+                        taken = False
+                if taken:
+                    self._cast_source = "bili"
+                    return {}
+                self._cast_source = "phone"
+                g.load(uri, meta, source="phone")
                 return {}
             if action == "SetNextAVTransportURI":
                 return {}
             if action == "Play":
-                g.play(source="phone", position=g.position_if_stopped())
+                g.play(source=self._cast_source, position=g.position_if_stopped())
                 return {}
             if action == "Pause":
-                g.pause(source="phone")
+                g.pause(source=self._cast_source)
                 return {}
             if action == "Stop":
-                g.stop(source="phone")
+                g.stop(source=self._cast_source)
                 return {}
             if action == "Seek":
                 target = args.get("Target", "")
                 unit = (args.get("Unit") or "REL_TIME").upper()
                 if unit == "TRACK_NR":
                     return {}
-                g.seek(parse_time(target), source="phone")
+                g.seek(parse_time(target), source=self._cast_source)
                 return {}
             if action == "Next" or action == "Previous":
                 return {}

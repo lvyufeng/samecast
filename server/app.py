@@ -5,15 +5,18 @@ import argparse
 import json
 import logging
 import os
+import re
 import socket
 import sys
 import threading
+import time
 import uuid as uuidlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import bili
 import dmr
+import nvaext
 from group import Group
 from receivers import KodiReceiver, WebReceiver
 from ssdp import SSDPServer
@@ -45,7 +48,8 @@ class App:
         self.port = int(config.get("port", 8090))
         self.ip = config.get("advertise_ip") or local_ip()
         self.base_url = config.get("base_url") or "http://%s:%d" % (self.ip, self.port)
-        self.friendly_name = config.get("friendly_name", "SameCast")
+        # 默认带上「我的小电视」前缀：B 站手机 App 只对名字以它开头的设备放开 1080P
+        self.friendly_name = config.get("friendly_name") or "我的小电视-SameCast"
 
         self.receivers = {}
         for item in config.get("receivers", []):
@@ -73,19 +77,35 @@ class App:
                            smooth_zone=float(config.get("smooth_zone", 2.0)),
                            hard_seek_zone=float(config.get("hard_seek_zone", 5.0)))
         self.facade = dmr.DmrFacade(self.group, udn, self.friendly_name, self.base_url)
+        # 手机 App 投屏 B 站视频时由服务端接管，换成最高清晰度的地址再下发
+        self.facade.on_cast = self._on_phone_cast
+        self._takeover_key = ""
+        self._takeover_at = 0.0
+        self._takeover_taken = False
+        # 「小电视」私有协议投屏时记下视频标识，后面换清晰度要用
+        self._bili_cast: dict = {}
         self.ssdp = SSDPServer(
             udn=udn,
-            location=self.base_url + "/device.xml",
+            # 与真实小电视一致：设备描述放在 /bilibili/description.xml
+            location=self.base_url + "/bilibili/description.xml",
             friendly_name=self.friendly_name,
-            services=[dmr.AVT, dmr.RCS, dmr.CMS],
+            services=[dmr.AVT, dmr.RCS, dmr.CMS, dmr.NVA],
             announce_interval=int(config.get("announce_interval", 300)),
             extra_st=config.get("discovery_st", DISCOVERY_ST),
         )
+        # 「小电视」私有协议要报当前播放状态和清晰度；默认按 1080P 应答
+        self._bili_qn = 80
         self.bili = None
         try:
             self.bili = bili.Bili(config.get("bilibili") or {}, on_cookie=self._save_bili_cookie)
         except Exception:  # noqa: BLE001
             LOG.exception("B 站模块初始化失败，投屏功能不受影响")
+        # 「小电视」私有协议：B 站 App 会问登录状态、会员状态和当前播放状态
+        self.facade.on_bili_signed_in = self._bili_signed_in
+        self.facade.on_bili_vip = self._bili_vip
+        self.facade.on_bili_play_info = self._bili_play_info
+        self.facade.on_bili_quality = self._bili_switch_quality
+        self.facade.on_mirror_url = self._bili_mirror_url
         self.httpd: ThreadingHTTPServer | None = None
 
     def _load_udn(self) -> str:
@@ -141,6 +161,88 @@ class App:
                 save_config(self.config_path, self.config)
             except OSError:
                 LOG.exception("保存 SESSDATA 到配置文件失败")
+
+    # ---------- 小电视私有协议用的账号/播放状态 ----------
+    def _bili_signed_in(self) -> bool:
+        if self.bili is None:
+            return False
+        try:
+            return bool(self.bili.logged_in())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _bili_vip(self) -> bool:
+        if self.bili is None:
+            return False
+        try:
+            return bool(self.bili.nav().get("vip"))
+        except Exception:  # noqa: BLE001
+            return False
+
+    # 清晰度档位：qn 是 B 站协议里的编号，电视端选轨按高度做
+    _QN_BY_HEIGHT = {360: 16, 480: 32, 720: 64, 1080: 80}
+
+    def _bili_play_info(self) -> dict:
+        """当前播放状态，按官方电视端 PlayInfo 的字段回给手机（不在播就回空）。"""
+        try:
+            snap = self.group.snapshot()
+        except Exception:  # noqa: BLE001
+            return {}
+        uri = str(snap.get("uri") or "")
+        if not uri:
+            return {}
+        state = str(snap.get("state") or "")
+        if state == "PLAYING":
+            status = 4       # 官方电视端里 4 = 播放中
+        elif state == "PAUSED_PLAYBACK":
+            status = 3
+        elif state == "STOPPED":
+            status = 6       # 停止/播完
+        else:
+            status = 5       # 缓冲/加载中
+        height = self._cast_bili_quality(uri)
+        qn = self._QN_BY_HEIGHT.get(height) or self._bili_qn
+        info = {"playerStatus": status,
+                "position": int(float(snap.get("position") or 0)),
+                "duration": int(float(snap.get("duration") or 0)),
+                "danmakuStatus": 0,
+                "qn": qn}
+        cast = self._bili_cast
+        if cast:
+            # 官方电视端会把当前分集的标识一起回给手机，自动连播 / 选集要用
+            info["aid"] = str(cast.get("aid") or "")
+            info["cid"] = str(cast.get("cid") or "")
+            info["epId"] = str(cast.get("ep_id") or "")
+            info["seasonId"] = str(cast.get("season_id") or "")
+            info["roomId"] = str(cast.get("room_id") or "")
+        return info
+
+    def _bili_switch_quality(self, qn: int) -> None:
+        """手机点击换清晰度：记住档位，下一次 GetPlayInfo 回显。
+
+        真正选哪条轨道由电视端按高度决定，这里不重新加载，避免打断播放。
+        """
+        try:
+            qn = int(qn or 0)
+        except (TypeError, ValueError):
+            return
+        if qn <= 0:
+            return
+        self._bili_qn = qn
+        LOG.info("手机切换 B 站清晰度：qn=%d", qn)
+        cast = self._bili_cast
+        if cast:
+            # 私有协议投屏时，官方电视端会换轨重放；取流比较慢，放到后台线程
+            threading.Thread(target=self._reload_bili_cast_quality,
+                             args=(cast, qn), daemon=True).start()
+
+    def _bili_mirror_url(self) -> str:
+        """官方电视端在「镜像投屏」时返回自己 5223 端口的地址。
+
+        SameCast 只做视频投屏、不做镜像推送，但协议里这个字段必须有值，
+        否则手机端可能直接报错；返回网关地址，让不支持的场景自然失败。
+        """
+        return "http://%s:5223" % self.ip
 
     def _bili_status(self) -> dict:
         if self.bili is None:
@@ -204,6 +306,236 @@ class App:
                 "receivers": len(self.receivers),
                 "logged_in": self._bili_status().get("logged_in", False)}
 
+    # ---------- 手机 App（B 站）投屏接管 ----------
+    # 手机 App 私有投屏 nva_ext（官方电视端的 NvaExtContent）字段有新旧多种写法：
+    # Gson 别名是 eid / sid / bd / sk / an 这类短名，旧版本还会再套一层 content。
+    _CAST_KEYS = {
+        "aid": ("aid", "avid"),
+        "cid": ("cid", "pageId"),
+        "ep_id": ("epId", "ep_id", "eid"),
+        "season_id": ("seasonId", "season_id", "sid"),
+        "room_id": ("roomId", "room_id"),
+        "bvid": ("bvid", "bd"),
+        "qn": ("userDesireQn", "user_desire_qn", "qn"),
+        "content_type": ("contentType", "ct"),
+        "seek": ("seekTs", "sk", "offset"),
+        "auto_next": ("autoNext", "an"),
+    }
+
+    def _parse_bili_cast_uri(self, uri: str) -> dict | None:
+        """解析手机 App 走「小电视」私有协议投屏时递来的 bilibili:// 地址。
+
+        官方电视端只从这个地址里取视频标识（aid / epId / cid / 想要的清晰度），
+        真正的播放地址由电视端自己再取一次，服务端也照做。
+        """
+        if not uri or "bilibili://" not in uri.lower():
+            return None
+        try:
+            query = parse_qs(urlparse(uri).query, keep_blank_values=True)
+        except ValueError:
+            return None
+        # 新版 App 会把参数压缩加密进 _nva_ext_（hex 或 base64url），旧版是明文 nva_ext
+        raw = (query.get("nva_ext") or [""])[0] or (query.get("_nva_ext_") or [""])[0]
+        if not raw:
+            LOG.info("手机投屏地址里没有 nva_ext，交回直链接管逻辑")
+            return None
+        data = nvaext.decode(raw)
+        if data is None:
+            LOG.info("nva_ext 解不开（加密形态未知），交回直链接管逻辑")
+            return None
+        content = data.get("content")
+        if not isinstance(content, dict):
+            content = data
+        cast: dict = {}
+        for name, keys in self._CAST_KEYS.items():
+            value = None
+            for key in keys:
+                for holder in (content, data):
+                    if key in holder and holder[key] not in (None, ""):
+                        value = holder[key]
+                        break
+                if value is not None:
+                    break
+            if value is None:
+                continue
+            try:
+                if name == "seek":
+                    cast[name] = float(value)
+                elif name == "auto_next":
+                    cast[name] = bool(value)
+                elif name == "bvid":
+                    cast[name] = str(value)
+                else:
+                    cast[name] = int(value)
+            except (TypeError, ValueError):
+                continue
+        if not any(cast.get(key) for key in ("aid", "ep_id", "season_id")):
+            LOG.info("nva_ext 里没有可识别的视频编号，交回直链接管逻辑")
+            return None
+        LOG.info("手机私有协议投屏：aid=%s ep=%s 分集=%s 请求清晰度=%s",
+                 cast.get("aid") or "-", cast.get("ep_id") or "-",
+                 cast.get("cid") or "-", cast.get("qn") or "-")
+        return cast
+
+    def _play_bili_cast(self, cast: dict) -> bool:
+        """手机 B 站 App 走私有协议投屏：服务端按视频标识重新取流再下发。"""
+        try:
+            result = self.bili.resolve_cast(cast, qn=int(cast.get("qn") or 0))
+        except bili.BiliError as exc:
+            LOG.info("B 站私有协议投屏取流失败，交回直链接管逻辑：%s", exc)
+            return False
+        except Exception:  # noqa: BLE001 - 接管失败要回退，不能影响投屏
+            LOG.exception("解析 B 站私有协议投屏地址失败")
+            return False
+        try:
+            if result.get("kind") == "file":
+                new_uri = result.get("url") or ""
+            else:
+                token = self.bili.register_stream(result["mpd"], result)
+                new_uri = self.base_url + "/api/bili/stream/" + token + ".mpd"
+        except Exception:  # noqa: BLE001
+            LOG.exception("生成 B 站私有协议投屏地址失败")
+            return False
+        if not new_uri:
+            return False
+        meta = self._bili_metadata(result.get("title") or "", result.get("quality") or "")
+        self._bili_cast = cast
+        if result.get("quality_id"):
+            self._bili_qn = int(result["quality_id"])
+        self.group.load(new_uri, meta, source="bili")
+        LOG.info("B 站手机投屏已接管（私有协议）：%s [%s] 共 %d 台",
+                 (result.get("title") or "")[:40], result.get("quality") or "?",
+                 len(self.receivers))
+        return True
+
+    def _reload_bili_cast_quality(self, cast: dict, qn: int) -> None:
+        """手机在「小电视」上换清晰度：按新档位重新取流，尽量停在原进度。"""
+        try:
+            snap = self.group.snapshot()
+            position = float(snap.get("position") or 0)
+            paused = str(snap.get("state") or "").startswith("PAUSED")
+            result = self.bili.resolve_cast(cast, qn=qn)
+            if result.get("kind") == "file":
+                new_uri = result.get("url") or ""
+            else:
+                token = self.bili.register_stream(result["mpd"], result)
+                new_uri = self.base_url + "/api/bili/stream/" + token + ".mpd"
+            if not new_uri:
+                return
+            meta = self._bili_metadata(result.get("title") or "",
+                                       result.get("quality") or "")
+            self.group.load(new_uri, meta, source="bili")
+            self.group.play(position=position if position > 0 else None)
+            if paused:
+                self.group.pause()
+            if result.get("quality_id"):
+                self._bili_qn = int(result["quality_id"])
+            LOG.info("B 站私有协议换清晰度：%s [%s]",
+                     (result.get("title") or "")[:40], result.get("quality") or "?")
+        except Exception:  # noqa: BLE001
+            LOG.exception("B 站私有协议换清晰度失败")
+
+    @staticmethod
+    def _cast_bili_target(uri: str, metadata: str) -> dict | None:
+        """从手机递来的投屏地址里认出 B 站视频目标（aid / bvid / ep_id）。"""
+        blob = (uri or "") + "\n" + (metadata or "")
+        lowered = blob.lower()
+        if "bilivideo" not in lowered and "bilibili" not in lowered:
+            return None
+        for pattern, key in ((r"(?:^|[/?&=])ep(\d{3,})", "ep_id"),
+                             (r"ep_id=(\d+)", "ep_id"),
+                             (r"/(\d{6,})-1-", "aid"),
+                             (r"(?:^|[?&])aid=(\d{4,})", "aid"),
+                             (r"(BV[0-9A-Za-z]{10})", "bvid")):
+            match = re.search(pattern, blob)
+            if not match:
+                continue
+            value = match.group(1)
+            return {"what": key, key: value if key == "bvid" else int(value)}
+        return None
+
+    # B 站 App 投屏直链的文件名末尾带清晰度编号：<aid>-1-<qn>.mp4
+    _QN_HEIGHT = {16: 360, 32: 480, 64: 720, 74: 720, 80: 1080, 112: 1080,
+                  116: 1080, 120: 2160, 125: 2160, 126: 2160, 127: 4320,
+                  192: 1080}
+
+    def _cast_bili_quality(self, uri: str) -> int:
+        """从手机投屏直链猜出 App 自己选的清晰度（高度），猜不到返回 0。"""
+        match = re.search(r"-1-(\d{1,4})\.(?:mp4|m4s|flv|ts)(?=$|[?&])", uri or "")
+        if not match:
+            return 0
+        try:
+            return self._QN_HEIGHT.get(int(match.group(1)), 0)
+        except ValueError:
+            return 0
+
+    def _on_phone_cast(self, uri: str, metadata: str) -> bool:
+        """接管手机 App 的 B 站投屏：服务端重新解析一遍，能更清晰才替换。
+
+        手机 App 递过来的是它自己签名的 CDN 直链，清晰度是 App 里选的档位。
+        服务端解析一遍既能绕开部分电视拉不到签名链接的情况，也能在登录后拿到更高清晰度；
+        但如果服务端解析出来不比手机直链清晰，就保持手机原地址，绝不把画面降档。
+        """
+        if self.bili is None:
+            return False
+        # 「小电视」私有协议：手机递来的是 bilibili:// 地址，只带视频标识
+        private = "bilibili://" in (uri or "").lower()
+        cast = self._parse_bili_cast_uri(uri)
+        if cast:
+            if self._play_bili_cast(cast):
+                return True
+            if private:
+                LOG.info("私有投屏取流失败，按已接管处理，避免电视播无效地址")
+                return True
+            return False
+        target = self._cast_bili_target(uri, metadata)
+        if not target:
+            if private:
+                # 认不出来的私有地址不能丢给电视，否则电视只会报播放失败
+                LOG.info("「小电视」私有投屏地址里没有视频编号，忽略这次广播")
+                return True
+            return False
+        key = "%s|%s" % (target, (uri or "")[:160])
+        now = time.time()
+        if self._takeover_key == key and now - self._takeover_at < 20.0:
+            # App 重试 SetAVTransportURI 时不要重复解析，直接用上次的结论
+            return self._takeover_taken
+        self._takeover_key = key
+        self._takeover_at = now
+        self._takeover_taken = False
+        try:
+            if target.get("ep_id"):
+                result = self.bili.resolve(
+                    "https://www.bilibili.com/bangumi/play/ep%d" % target["ep_id"])
+            elif target.get("bvid"):
+                result = self.bili.resolve(target["bvid"])
+            else:
+                result = self.bili.resolve_aid(target["aid"])
+        except Exception as exc:  # noqa: BLE001 - 接管失败要回退，不能影响投屏
+            LOG.info("B 站手机投屏接管失败，沿用手机原始地址：%s", exc)
+            return False
+        server_height = int(result.get("height") or 0)
+        app_height = self._cast_bili_quality(uri)
+        if app_height and server_height <= app_height:
+            LOG.info("B 站手机投屏保持原地址：手机 %dP，服务端 %dP，不降档",
+                     app_height, server_height)
+            return False
+        meta = self._bili_metadata(result.get("title") or "", result.get("quality") or "")
+        if result.get("kind") == "file":
+            new_uri = result.get("url") or ""
+        else:
+            token = self.bili.register_stream(result["mpd"], result)
+            new_uri = self.base_url + "/api/bili/stream/" + token + ".mpd"
+        if not new_uri:
+            return False
+        self._takeover_taken = True
+        self.group.load(new_uri, meta, source="bili")
+        LOG.info("B 站手机投屏已接管：%s [%s %dx%d] 共 %d 台",
+                 (result.get("title") or "")[:40], result.get("quality") or "?",
+                 int(result.get("width") or 0), int(result.get("height") or 0),
+                 len(self.receivers))
+        return True
+
     def start(self) -> None:
         ThreadingHTTPServer.allow_reuse_address = True
         self.httpd = ThreadingHTTPServer(("0.0.0.0", self.port), Handler)
@@ -224,7 +556,7 @@ class App:
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "SameCast/0.5.0"
+    server_version = "SameCast/0.6.0"
 
     # ---- 工具 ----
     @property
@@ -243,7 +575,7 @@ class Handler(BaseHTTPRequestHandler):
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
-        if body:
+        if body and not getattr(self, "_head_only", False):
             self.wfile.write(body)
 
     def _json(self, data, code: int = 200) -> None:
@@ -266,6 +598,16 @@ class Handler(BaseHTTPRequestHandler):
         with open(path, "rb") as fh:
             return fh.read()
 
+    # ---- HEAD：部分电视 / App 会先探活，头照给、正文留空 ----
+    def do_HEAD(self) -> None:  # noqa: N802
+        self._head_only = True
+        try:
+            self.do_GET()
+        except Exception:  # noqa: BLE001
+            LOG.debug("HEAD %s 失败", self.path, exc_info=True)
+        finally:
+            self._head_only = False
+
     # ---- GET ----
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
@@ -276,13 +618,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self._static("dashboard.html"), "text/html; charset=utf-8")
             if path == "/tv" or path == "/tv.html":
                 return self._send(200, self._static("tv.html"), "text/html; charset=utf-8")
-            if path == "/device.xml":
+            if path in ("/device.xml", "/bilibili/description.xml"):
+                LOG.info("设备描述请求：%s UA=%s", self.client_address[0],
+                         (self.headers.get("USER-AGENT") or "")[:40])
                 return self._send(200, app.facade.device_xml(), "text/xml; charset=utf-8")
-            if path in ("/AVTransport/scpd.xml", "/RenderingControl/scpd.xml", "/ConnectionManager/scpd.xml"):
-                service = {"/AVTransport/scpd.xml": dmr.AVT,
-                           "/RenderingControl/scpd.xml": dmr.RCS,
-                           "/ConnectionManager/scpd.xml": dmr.CMS}[path]
-                return self._send(200, app.facade.scpd(service), "text/xml; charset=utf-8")
+            svc, svc_kind = dmr.parse_service_path(path)
+            if svc is not None and svc_kind == "scpd":
+                return self._send(200, app.facade.scpd(svc), "text/xml; charset=utf-8")
             if path == "/api/status":
                 return self._json(app.group.snapshot())
             if path.startswith("/api/recv/") and path.endswith("/poll"):
@@ -330,7 +672,8 @@ class Handler(BaseHTTPRequestHandler):
         kind = (query.get("kind") or [""])[0]
         app = self.app
         try:
-            if path in ("/AVTransport/control", "/RenderingControl/control", "/ConnectionManager/control"):
+            svc, svc_kind = dmr.parse_service_path(path)
+            if svc is not None and svc_kind == "soap":
                 return self._handle_soap(path)
             if path == "/api/control":
                 payload = self._read_json()
@@ -433,7 +776,12 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_soap(self, path: str) -> None:
         body = self._read_body()
         service_type, action, args = dmr.parse_soap(body)
-        LOG.info("SOAP %s#%s %s", service_type, action, {k: v[:60] for k, v in args.items()})
+        if action == "SetAVTransportURI":
+            LOG.info("投屏请求来自 %s UA=%s", self.client_address[0],
+                     (self.headers.get("USER-AGENT") or "")[:40])
+        safe = {k: re.sub(r"https?://[^\s]+", "<redacted-url>", str(v))[:60]
+                for k, v in args.items()}
+        LOG.info("SOAP %s#%s %s", service_type, action, safe)
         try:
             out = self.app.facade.handle(service_type, action, args)
         except KeyError:
@@ -450,10 +798,8 @@ class Handler(BaseHTTPRequestHandler):
     # ---- GENA 订阅 ----
     def do_SUBSCRIBE(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
-        service = {"/AVTransport/event": dmr.AVT,
-                   "/RenderingControl/event": dmr.RCS,
-                   "/ConnectionManager/event": dmr.CMS}.get(path)
-        if not service:
+        service, service_kind = dmr.parse_service_path(path)
+        if service is None or service_kind != "gena":
             return self._send(404, b"not found")
         sid = self.headers.get("SID")
         timeout = self._parse_timeout(self.headers.get("TIMEOUT"))
