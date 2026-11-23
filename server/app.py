@@ -48,8 +48,12 @@ class App:
         self.port = int(config.get("port", 8090))
         self.ip = config.get("advertise_ip") or local_ip()
         self.base_url = config.get("base_url") or "http://%s:%d" % (self.ip, self.port)
-        # 默认带上「我的小电视」前缀：B 站手机 App 只对名字以它开头的设备放开 1080P
+        # 面板 / 文档 / 日志里用的品牌名
         self.friendly_name = config.get("friendly_name") or "我的小电视-SameCast"
+        # 真正注入到 description.xml / SSDP 的设备名。B 站手机 App 只认这一个字段：
+        # 它既要显示在投屏列表里，又参与「是不是小电视」的判断（小电视标志、1080P/4K
+        # 放开、need_login/need_vip 等），所以必须注入官方名「我的小电视」。
+        self.device_name = config.get("device_name") or "我的小电视"
 
         self.receivers = {}
         for item in config.get("receivers", []):
@@ -76,7 +80,7 @@ class App:
                            seek_cooldown=float(config.get("seek_cooldown", 8.0)),
                            smooth_zone=float(config.get("smooth_zone", 2.0)),
                            hard_seek_zone=float(config.get("hard_seek_zone", 5.0)))
-        self.facade = dmr.DmrFacade(self.group, udn, self.friendly_name, self.base_url)
+        self.facade = dmr.DmrFacade(self.group, udn, self.device_name, self.base_url)
         # 手机 App 投屏 B 站视频时由服务端接管，换成最高清晰度的地址再下发
         self.facade.on_cast = self._on_phone_cast
         self._takeover_key = ""
@@ -88,7 +92,7 @@ class App:
             udn=udn,
             # 与真实小电视一致：设备描述放在 /bilibili/description.xml
             location=self.base_url + "/bilibili/description.xml",
-            friendly_name=self.friendly_name,
+            friendly_name=self.device_name,
             services=[dmr.AVT, dmr.RCS, dmr.CMS, dmr.NVA],
             announce_interval=int(config.get("announce_interval", 300)),
             extra_st=config.get("discovery_st", DISCOVERY_ST),
@@ -201,7 +205,8 @@ class App:
         else:
             status = 5       # 缓冲/加载中
         height = self._cast_bili_quality(uri)
-        qn = self._QN_BY_HEIGHT.get(height) or self._bili_qn
+        # 私有协议投屏时以手机点选/实际取到的档位为准，免得 1080P60 这类档位被降回 1080P
+        qn = (self._bili_qn if self._bili_cast else 0) or self._QN_BY_HEIGHT.get(height) or self._bili_qn
         info = {"playerStatus": status,
                 "position": int(float(snap.get("position") or 0)),
                 "duration": int(float(snap.get("duration") or 0)),
@@ -226,7 +231,8 @@ class App:
             qn = int(qn or 0)
         except (TypeError, ValueError):
             return
-        if qn <= 0:
+        if qn <= 0 or qn == self._bili_qn:
+            # 手机每次拉完 GetPlayInfo 都可能重发同一个档位，重复换轨会打断正在播的流
             return
         self._bili_qn = qn
         LOG.info("手机切换 B 站清晰度：qn=%d", qn)
@@ -542,7 +548,8 @@ class App:
         self.httpd.app = self  # type: ignore[attr-defined]
         self.ssdp.start()
         self.group.start()
-        LOG.info("服务已启动: %s  设备名=%s", self.base_url, self.friendly_name)
+        LOG.info("服务已启动: %s  设备名=%s（投屏列表显示 %s）",
+                 self.base_url, self.device_name, self.friendly_name)
         LOG.info("接收端: %s", ", ".join("%s(%s)" % (r.name, r.kind) for r in self.receivers.values()))
         LOG.info("网页接收端测试地址: %s/tv?id=<接收端id>", self.base_url)
         self.httpd.serve_forever()
@@ -642,7 +649,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/receivers":
                 return self._json([r.describe() for r in app.receivers.values()])
             if path == "/api/info":
-                return self._json({"name": app.friendly_name, "version": VERSION,
+                return self._json({"name": app.friendly_name,
+                                   "device_name": app.device_name,
+                                   "version": VERSION,
                                    "discovery_st": DISCOVERY_ST,
                                    "bilibili": app.bili is not None,
                                    "receivers": [r.describe() for r in app.receivers.values()]})

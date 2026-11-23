@@ -184,6 +184,7 @@ samecast/
 │   ├── group.py        # 同步组：时间轴、指令广播、漂移校正、用户操作检测
 │   ├── bili.py         # B 站解析：链接/BV 号 → DASH 或网页直链（可选登录）
 │   ├── nvaext.py       # B 站私有投屏参数 nva_ext / _nva_ext_ 解码（明文 / hex / base64url+deflate）
+│   ├── nirvana.py      # B 站小电视私有协议（NirvanaControl）SOAP 动作与应答
 │   ├── qrcodegen.py    # 二维码生成（扫码登录用，vendored，MIT）
 │   ├── receivers.py    # 接收端：Kodi(JSON-RPC) / 网页(轮询) / 电视 App(轮询)
 │   ├── ssdp.py         # SSDP 发现与通告
@@ -229,7 +230,7 @@ cd server && python3 -m unittest discover -s tests
 - **登录更清晰**：点「登录 B 站」用手机 B 站 App 扫码（二维码在服务器本地生成，不经过任何第三方服务）。登录后走 DASH 自适应流，普通账号 1080P+，大会员可 4K；
 - 登录态只保存在服务器的 `config.json` 里，电视端不用装 B 站、也不用登录；随时可以点「退出」清掉；
 - 解析出的播放地址是短时效的 CDN 链接，服务端不写日志；电视端只在请求 B 站域名时补 Referer / UA 头；
-- **手机 App 直接投屏也能上 1080P**：B 站 App 的「投屏」按钮走 DLNA，SameCast 在设备列表里显示为「我的小电视-SameCast」——名字故意以「我的小电视」开头，因为 B 站 App 只对这类设备放开 1080P 及以上；名字可以在 `config.json` 的 `friendly_name` 里改，但改了之后手机端可能只给到 720P；
+- **设备名做了「显示名 / 注入名」拆分**：B 站 App 只有一个设备名字段（`<friendlyName>`），它既负责在投屏列表里显示，又参与「是不是小电视」的判断——只有名字**正好是**「我的小电视」才会出现小电视标志、放开 1080P/4K、并按小电视逻辑询问登录/会员状态。所以注入名固定为「我的小电视」（`device_name`），品牌名「我的小电视-SameCast」只用于控制台、日志和文档（`friendly_name`）；
 - 手机把视频投过来以后，服务端会按手机请求的清晰度重新取流（手机端只是「遥控器」，真正的流由服务端出），再整组下发给所有电视；暂停 / 快进 / 换清晰度仍然整组同步，换清晰度会尽量停在原进度；
 - 手机走「小电视」私有协议投屏（`bilibili://` 地址 + `nva_ext`）时同样接管，私有协议需要的登录状态、会员状态、播放状态、清晰度列表都由服务端应答，所以 App 里看到的就是一台「小电视」；
 - 新版 App 会把参数压缩加密：明文 `nva_ext`、hex 形态的 AES、base64url+AES+deflate 这三种写法都能解开（`server/nvaext.py`，纯标准库，不依赖第三方加密包），所以升级 App 之后不用再抓包；

@@ -1,5 +1,6 @@
 {
   "friendly_name": "我的小电视-SameCast",
+  "device_name": "我的小电视",
   "port": 8090,
   "drift_tolerance": 1.5,
   "poll_interval": 1,
