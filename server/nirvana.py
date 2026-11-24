@@ -256,17 +256,28 @@ def handle(action: str, args: dict, host) -> dict:
     这一步只保证 App 侧握手成功，所有动作都不返回 SOAP Fault，
     免得个别版本的 App 因为某个动作失败直接把设备判成「不可用」。
     """
+    # 只打动作名和参数名，不打参数值：Code 之类的属于账号凭据。
+    if action == "GetPlayInfo":
+        LOG.debug("NirvanaControl %s 参数=%s", action, ",".join(sorted(args)) or "-")
+    else:
+        LOG.info("NirvanaControl %s 参数=%s", action, ",".join(sorted(args)) or "-")
     if action == "GetAppInfo":
+        # CurrentSignedIn 必须是 1/yes/true，手机端解析时会直接拆箱，
+        # 缺字段或空值会让它崩在登录态判断上。
+        # SameCast 的前提是「电视端不用登录也能收到投屏」，所以没配账号时
+        # 固定上报已登录，让手机跳过「给电视推送登录码再等电视登录」这一段，
+        # 否则手机会一直停在等待电视登录，不会走到真正的投屏指令。
         return {
             "PackageName": PACKAGE_NAME,
             "AppKey": APP_KEY,
             "Signature": SIGNATURE,
-            "CurrentSignedIn": "1" if host.bili_signed_in() else "0",
+            "CurrentSignedIn": "1",
         }
     if action == "GetAccountInfo":
-        # 与官方电视端一致：-1 未登录、0 已登录非会员、1 电视端会员
+        # 与官方电视端一致：-1 未登录、0 已登录非会员、1 电视端会员。
+        # 上报「已登录非会员」与上面的 CurrentSignedIn=1 保持一致。
         if not host.bili_signed_in():
-            return {"VipInfo": "-1"}
+            return {"VipInfo": "0"}
         return {"VipInfo": "1" if host.bili_vip() else "0"}
     if action == "PrepareForMirrorProjection":
         return {"ScreenWidth": "1920", "ScreenHeight": "1080",

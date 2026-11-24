@@ -45,6 +45,11 @@ _PATH_KINDS = {
     "event": "gena",
 }
 
+# 说明：ottVersion 是手机端识别「电视端能力」的版本号：
+#   >= 104001 手机端才会显示小电视标志（xv32 / NirvanaEngine 的版本门槛）
+#   >= 104300 才放开 4K 清晰度
+# 投屏链路本身不依赖这个值——实测 103900 和 108300 都能正常收到
+# SetAVTransportURI + Play；这里填官方云视听小电视 1.8.x 的 108300，和真机一致。
 DEVICE_XML = """<?xml version="1.0" encoding="utf-8"?>
 <root configId="8693519" xmlns="urn:schemas-upnp-org:device-1-0" xmlns:dlna="urn:schemas-dlna-org:device-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
