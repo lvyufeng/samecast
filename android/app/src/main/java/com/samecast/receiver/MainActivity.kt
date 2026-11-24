@@ -1260,7 +1260,41 @@ class MainActivity : Activity() {
         )
     }
 
+    /**
+     * 执行网关下发的指令。
+     *
+     * 这里必须兜底：ExoPlayer 在遇到不认识的片源（比如老版本没打包 DASH 模块却收到 .mpd）
+     * 会直接抛 IllegalStateException，以前一抛就把电视端整个进程带崩，表现成「投屏就闪退」。
+     * 现在改成在屏幕上提示，用户还能重新投屏或升级 App。
+     */
     private fun applyCommand(cmd: JSONObject) {
+        try {
+            applyCommandInner(cmd)
+        } catch (e: Exception) {
+            onCommandFailed(cmd, e)
+        } catch (e: LinkageError) {
+            onCommandFailed(cmd, e)
+        }
+    }
+
+    /** 指令失败：记日志 + 屏幕上给中文提示，不闪退。 */
+    private fun onCommandFailed(cmd: JSONObject, e: Throwable) {
+        val name = cmd.optString("cmd")
+        Log.w(TAG, "指令执行失败: $name -> " + e.javaClass.simpleName + ": " + e.message)
+        val message = e.message ?: ""
+        errorText = when {
+            message.contains("No suitable media source factory") ->
+                "电视端 SameCast 版本太旧，不支持这种片源格式\n请在电视上安装新版接收端后再投屏"
+            else -> "这条投屏指令没能执行\n" + (message.ifEmpty { e.javaClass.simpleName })
+        }
+        try {
+            refreshUi()
+        } catch (ignored: Exception) {
+            // 界面状态本身异常时忽略，绝不能让兜底逻辑再抛一次
+        }
+    }
+
+    private fun applyCommandInner(cmd: JSONObject) {
         when (cmd.optString("cmd")) {
             "load" -> {
                 val uri = cmd.optString("uri")

@@ -4,8 +4,8 @@ plugins {
 }
 
 // 版本号只在这里改，APK 文件名也跟着走：SameCast-<版本>-debug.apk
-val samecastVersionName = "0.6.0"
-val samecastVersionCode = 7
+val samecastVersionName = "0.6.2"
+val samecastVersionCode = 9
 
 android {
     namespace = "com.samecast.receiver"
