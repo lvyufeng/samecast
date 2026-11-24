@@ -22,11 +22,18 @@ from receivers import KodiReceiver, WebReceiver
 from ssdp import SSDPServer
 
 LOG = logging.getLogger("app")
-VERSION = "0.6.0"
+VERSION = "0.6.3"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 电视端 App 用这个 ST 做自动发现，避免在电视上输入 IP
 DISCOVERY_ST = "urn:samecast:service:Gateway:1"
 WEB_DIR = os.path.join(BASE_DIR, "..", "web")
+
+
+def _redact_bytes(raw: bytes, limit: int = 72) -> str:
+    """把一段原始字节做成可读的一行日志（URL 脱敏，控制字符转义）。"""
+    text = raw[:limit].decode("utf-8", "backslashreplace")
+    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\0")
+    return re.sub(r"https?://[^\s]+", "<redacted-url>", text) or "-"
 
 
 def local_ip() -> str:
@@ -96,6 +103,9 @@ class App:
             services=[dmr.AVT, dmr.RCS, dmr.CMS, dmr.NVA],
             announce_interval=int(config.get("announce_interval", 300)),
             extra_st=config.get("discovery_st", DISCOVERY_ST),
+            # 电视端 App 靠「LOCATION 去掉 /device.xml」得到 API 根地址，
+            # 所以私有发现类型单独指向 /device.xml；B 站 App 继续用 /bilibili/description.xml
+            gateway_location=self.base_url + "/device.xml",
         )
         # 「小电视」私有协议要报当前播放状态和清晰度；默认按 1080P 应答
         self._bili_qn = 80
@@ -563,7 +573,7 @@ class App:
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "SameCast/0.6.0"
+    server_version = "SameCast/0.6.3"
 
     # ---- 工具 ----
     @property
@@ -572,6 +582,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):  # noqa: A003 - 让日志走 logging
         LOG.debug("%s - %s", self.address_string(), fmt % args)
+
+    def log_request(self, code="-", size="-"):  # noqa: A003
+        """把每个 HTTP 请求打到 INFO：排查手机/电视端"连不上、投屏没反应"时靠它。
+
+        轮询接口每秒一次，压到 DEBUG 免得刷屏；URL 一律脱敏。
+        BaseHTTPRequestHandler 在 parse_request() 早期出错时会直接 send_error()，
+        那时 self.command / self.path 还没赋值，所以这里一律用 getattr 兜底。
+        """
+        path = re.sub(r"https?://[^\s]+", "<redacted-url>", getattr(self, "path", None) or "")
+        command = getattr(self, "command", None) or "-"
+        if "/poll" in path:
+            LOG.debug("HTTP %s %s -> %s", command, path[:120], code)
+            return
+        headers = getattr(self, "headers", None)
+        ua = (headers.get("USER-AGENT") if headers is not None else "") or ""
+        LOG.info("HTTP %s %s -> %s UA=%s", command, path[:120] or "-", code, ua[:40])
+
+    def send_error(self, code, message=None, explain=None) -> None:
+        """畸形请求也要回一条带状态行的错误响应。
+
+        parse_request() 解析失败时 self.request_version 还是默认的 HTTP/0.9，
+        标准库会因此省略状态行（只发 HTML 正文），客户端拿到的是一段无法解析的
+        字节流。这里强制提升成 HTTP/1.1，让对端至少能看懂 400。
+        """
+        if getattr(self, "request_version", "HTTP/0.9") == "HTTP/0.9":
+            self.request_version = "HTTP/1.1"
+        super().send_error(code, message, explain)
+
+    def parse_request(self) -> bool:  # noqa: A003
+        """记录解析失败的原始请求行：有的投屏端会先发自定义二进制/非 HTTP 握手。"""
+        ok = super().parse_request()
+        if not ok:
+            LOG.info("请求行无法解析: %s  来自 %s",
+                     _redact_bytes(getattr(self, "raw_requestline", b"") or b""),
+                     self.client_address[0])
+        return ok
 
     def _send(self, code: int, body: bytes = b"", content_type: str = "text/plain; charset=utf-8",
               extra: dict[str, str] | None = None) -> None:
@@ -814,6 +860,7 @@ class Handler(BaseHTTPRequestHandler):
         timeout = self._parse_timeout(self.headers.get("TIMEOUT"))
         if sid:
             ok = self.app.facade.renew(sid, timeout)
+            LOG.info("GENA 续订 %s %s", service_kind, "OK" if ok else "SID 未知")
             if not ok:
                 return self._send(412, b"precondition failed")
             return self._send(200, b"", "text/xml; charset=utf-8",
@@ -821,6 +868,7 @@ class Handler(BaseHTTPRequestHandler):
         callback = self.headers.get("CALLBACK") or ""
         if not callback:
             return self._send(412, b"missing CALLBACK")
+        LOG.info("GENA 订阅 %s 来自 %s", service_kind, self.client_address[0])
         sid, timeout = self.app.facade.subscribe(service, callback, timeout)
         # 立即回一次当前状态，部分控制器依赖首次事件
         threading.Thread(target=self.app.facade.notify_state, daemon=True).start()
@@ -831,6 +879,7 @@ class Handler(BaseHTTPRequestHandler):
         sid = self.headers.get("SID")
         if not sid or not self.app.facade.unsubscribe(sid):
             return self._send(412, b"precondition failed")
+        LOG.info("GENA 退订 %s", self.client_address[0])
         return self._send(200, b"", "text/xml; charset=utf-8")
 
     @staticmethod

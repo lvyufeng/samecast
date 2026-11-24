@@ -21,7 +21,8 @@ class SSDPServer(threading.Thread):
                  device_type: str = "urn:schemas-upnp-org:device:MediaRenderer:1",
                  services: list[str] | None = None,
                  announce_interval: int = 300,
-                 extra_st: str | None = None):
+                 extra_st: str | None = None,
+                 gateway_location: str | None = None):
         super().__init__(daemon=True, name="ssdp")
         self.udn = udn if udn.lower().startswith("uuid:") else "uuid:" + udn
         self.location = location
@@ -30,6 +31,9 @@ class SSDPServer(threading.Thread):
         self.services = services or []
         self.announce_interval = announce_interval
         self.extra_st = extra_st
+        # 自研接收端 App 按 LOCATION 去掉 "/device.xml" 得到 API 根地址，
+        # 所以私有发现类型必须回 /device.xml，不能跟 B 站描述文件共用路径。
+        self.gateway_location = gateway_location
         self._stop = threading.Event()
         self._sock = None
         self._last_usn_by_st: dict[str, int] = {}
@@ -86,6 +90,11 @@ class SSDPServer(threading.Thread):
         sock.settimeout(1.0)
         self._sock = sock
 
+    def _location_for(self, st: str) -> str:
+        if self.gateway_location and self.extra_st and st == self.extra_st:
+            return self.gateway_location
+        return self.location
+
     def _message(self, kind: str, st: str, usn: str) -> bytes:
         lines = [
             "NOTIFY * HTTP/1.1" if kind != "response" else "HTTP/1.1 200 OK",
@@ -93,7 +102,7 @@ class SSDPServer(threading.Thread):
             "CACHE-CONTROL: max-age=1800",
             "DATE: " + time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime()),
             "EXT:",
-            "LOCATION: " + self.location,
+            "LOCATION: " + self._location_for(st),
             "SERVER: Linux/3.0.0, UPnP/1.0, Platinum/1.0.5.13",
             "ST: " + st,
             "USN: " + usn,

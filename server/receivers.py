@@ -216,6 +216,21 @@ class WebReceiver(Receiver):
     def online(self) -> bool:
         return (time.time() - self._last_seen) < 15
 
+    def describe(self) -> dict:
+        """给网页/接口用的接收端摘要：在线状态、播放状态、进度和最后一次上报距今多久。"""
+        data = super().describe()
+        with self._lock:
+            st = dict(self._status)
+            last_seen = self._last_seen
+        data.update({
+            "online": (time.time() - last_seen) < 15,
+            "state": st.get("state", "unknown"),
+            "position": round(float(st.get("position") or 0.0), 3),
+            "duration": round(float(st.get("duration") or 0.0), 3),
+            "age": round(max(0.0, time.time() - last_seen), 1),
+        })
+        return data
+
     def _push(self, cmd: dict) -> None:
         with self._lock:
             self._seq += 1

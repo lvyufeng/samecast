@@ -17,8 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ssdp import SSDPServer  # noqa: E402
 
-LOCATION = "http://192.168.1.10:8090/device.xml"
+LOCATION = "http://192.168.1.10:8090/bilibili/description.xml"
+GATEWAY_LOCATION = "http://192.168.1.10:8090/device.xml"
 PRIVATE_ST = "urn:samecast:service:Gateway:1"
+NVA_ST = "urn:app-bilibili-com:service:NirvanaControl:3"
 MSEARCH = (
     "M-SEARCH * HTTP/1.1\r\n"
     "HOST: 239.255.255.250:1900\r\n"
@@ -41,8 +43,9 @@ def make_server() -> SSDPServer:
         udn="9c8f6a52-0000-4000-8000-000000000001",
         location=LOCATION,
         friendly_name="SameCast",
-        services=["urn:schemas-upnp-org:service:AVTransport:1"],
+        services=["urn:schemas-upnp-org:service:AVTransport:1", NVA_ST],
         extra_st=PRIVATE_ST,
+        gateway_location=GATEWAY_LOCATION,
         announce_interval=3600,
     )
     srv._sock = FakeSocket()
@@ -63,7 +66,7 @@ class SSDPServerTest(unittest.TestCase):
         self.assertEqual(addr, client)
         text = data.decode()
         self.assertTrue(text.startswith("HTTP/1.1 200 OK\r\n"))
-        self.assertIn("LOCATION: " + LOCATION, text)
+        self.assertIn("LOCATION: " + GATEWAY_LOCATION, text)
         self.assertIn("ST: " + PRIVATE_ST, text)
         self.assertIn("USN: uuid:9c8f6a52-0000-4000-8000-000000000001::" + PRIVATE_ST, text)
         # 没有第二只发送 socket 了，避免回包源端口不是 1900
@@ -79,6 +82,37 @@ class SSDPServerTest(unittest.TestCase):
         self.assertIn("ST: upnp:rootdevice", sts)
         self.assertIn("ST: urn:schemas-upnp-org:device:MediaRenderer:1", sts)
         self.assertIn("ST: " + PRIVATE_ST, sts)
+
+    def test_location_depends_on_target(self) -> None:
+        """自研 App 按私有 ST 找网关（/device.xml），其他设备/服务一律给 B 站描述（/bilibili/description.xml）。
+
+        回归点：LOCATION 曾经只有一个地址，旧版 App 从 /bilibili/description.xml 反推 API
+        基础地址失败，导致服务端和电视 App 连不上。
+        """
+        srv = make_server()
+        with mock.patch("ssdp.time.sleep", return_value=None):
+            srv._handle_msearch(MSEARCH.format(st=PRIVATE_ST).encode(), ("10.0.0.9", 1900))
+            srv._handle_msearch(MSEARCH.format(st="urn:schemas-upnp-org:device:MediaRenderer:1").encode(), ("10.0.0.9", 1900))
+            srv._handle_msearch(MSEARCH.format(st=NVA_ST).encode(), ("10.0.0.9", 1900))
+        sock = srv._sock
+        assert isinstance(sock, FakeSocket)
+        locations = [line for data, _ in sock.sent
+                     for line in data.decode().split("\r\n") if line.startswith("LOCATION: ")]
+        self.assertEqual(locations, ["LOCATION: " + GATEWAY_LOCATION,
+                                     "LOCATION: " + LOCATION,
+                                     "LOCATION: " + LOCATION])
+
+    def test_nirvana_control_target_is_answered(self) -> None:
+        """B 站手机 App 靠 NirvanaControl:3 认「小电视」；扫到这个类型才有小电视标志。"""
+        srv = make_server()
+        with mock.patch("ssdp.time.sleep", return_value=None):
+            srv._handle_msearch(MSEARCH.format(st=NVA_ST).encode(), ("10.0.0.9", 1900))
+        sock = srv._sock
+        assert isinstance(sock, FakeSocket)
+        self.assertEqual(len(sock.sent), 1)
+        text = sock.sent[0][0].decode()
+        self.assertIn("ST: " + NVA_ST, text)
+        self.assertIn("::" + NVA_ST, text)
 
     def test_unknown_target_is_ignored(self) -> None:
         srv = make_server()

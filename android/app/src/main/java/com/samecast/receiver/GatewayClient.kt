@@ -98,11 +98,19 @@ class GatewayClient(
                     ?.trim()
                     ?: continue
                 Log.i(TAG, "发现网关: " + location)
-                // LOCATION 指向 /device.xml，API 根路径就是去掉这一段
-                return location.removeSuffix("/device.xml")
+                // LOCATION 指向设备描述 XML（/device.xml 或 /bilibili/description.xml），API 根路径就是去掉这一段
+                return apiBase(location)
             }
         }
         return null
+    }
+
+    /** 从设备描述 URL 里取出网关 API 根地址，不依赖具体描述文件路径。 */
+    private fun apiBase(location: String): String {
+        for (suffix in arrayOf("/device.xml", "/description.xml")) {
+            if (location.endsWith(suffix)) return location.substring(0, location.length - suffix.length)
+        }
+        return location.substringBeforeLast('/')
     }
 
     private fun poll(base: String) {
