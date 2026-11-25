@@ -262,22 +262,23 @@ def handle(action: str, args: dict, host) -> dict:
     else:
         LOG.info("NirvanaControl %s 参数=%s", action, ",".join(sorted(args)) or "-")
     if action == "GetAppInfo":
-        # CurrentSignedIn 必须是 1/yes/true，手机端解析时会直接拆箱，
-        # 缺字段或空值会让它崩在登录态判断上。
-        # SameCast 的前提是「电视端不用登录也能收到投屏」，所以没配账号时
-        # 固定上报已登录，让手机跳过「给电视推送登录码再等电视登录」这一段，
-        # 否则手机会一直停在等待电视登录，不会走到真正的投屏指令。
+        # CurrentSignedIn 要如实上报：它是手机端判断「电视端 App 登录态」的唯一依据。
+        # 实测（2026-11-24 21:40 可投，2026-11-25 21:45 不可投）把它强行写成 1
+        # 会让手机认为这是一台已登录的官方云视听小电视，从而改走 NVA 私有推流
+        # （SETUP /projection NVA/1.0），我们的虚拟设备不支持 NVA，投屏直接断在半路；
+        # 如实上报 0 时手机会退回标准 DLNA（SetAVTransportURI + Play），这条路是通的。
+        signed_in = bool(host.bili_signed_in())
         return {
             "PackageName": PACKAGE_NAME,
             "AppKey": APP_KEY,
             "Signature": SIGNATURE,
-            "CurrentSignedIn": "1",
+            "CurrentSignedIn": "1" if signed_in else "0",
         }
     if action == "GetAccountInfo":
         # 与官方电视端一致：-1 未登录、0 已登录非会员、1 电视端会员。
-        # 上报「已登录非会员」与上面的 CurrentSignedIn=1 保持一致。
+        # 与 CurrentSignedIn 保持一致，避免手机端两处登录态自相矛盾。
         if not host.bili_signed_in():
-            return {"VipInfo": "0"}
+            return {"VipInfo": "-1"}
         return {"VipInfo": "1" if host.bili_vip() else "0"}
     if action == "PrepareForMirrorProjection":
         return {"ScreenWidth": "1920", "ScreenHeight": "1080",
